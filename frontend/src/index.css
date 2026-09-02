@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/*
+ * Strata design tokens — UI/UX Brief §2 (Color System) and §3 (Typography).
+ *
+ * Dark is the default surface (the brief lists it first and every mockup in
+ * the brief uses it); a light variant is declared for a future toggle but
+ * isn't wired up to a switch yet — that's a Settings-panel feature, not a
+ * Phase 1 chrome concern.
+ *
+ * Font: the brief calls for "a single geometric-humanist sans (system UI
+ * stack: Inter or equivalent)". A privacy-first, local-first browser
+ * shouldn't phone home to Google Fonts for its own chrome, so this uses the
+ * OS system-UI stack (Segoe UI on Windows) rather than bundling or fetching
+ * Inter — visually in the same family, zero network dependency.
+ */
+@theme {
+  --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto,
+    sans-serif;
+
+  --color-bg: #0b0c10;
+  --color-surface: #12141a;
+  --color-surface-2: #191c24;
+  --color-border: #252936;
+  --color-text-primary: #f4f5f7;
+  --color-text-secondary: #858a98;
+  --color-accent: #8b7cff;
+  --color-accent-2: #54d6c7;
+}
+
+:root[data-theme="light"] {
+  --color-bg: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f1f4;
+  --color-border: #dcdde3;
+  --color-text-primary: #17181c;
+  --color-text-secondary: #6b6f7a;
+  --color-accent: #6957e8;
+  --color-accent-2: #159e91;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Structural/label chrome text — wide tracking + uppercase, per brief §3. */
+.chrome-label {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}

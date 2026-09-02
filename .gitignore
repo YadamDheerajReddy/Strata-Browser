@@ -33,3 +33,6 @@ Thumbs.db
 
 # Strata local data (never commit user browsing data)
 .strata/
+
+# Harness-internal state (not part of the project)
+.claude/
