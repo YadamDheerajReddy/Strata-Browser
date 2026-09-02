@@ -1,0 +1,35 @@
+# CEF binary distribution (downloaded, not committed — see scripts/setup_cef.md)
+cef/*
+!cef/.gitkeep
+
+# Native build output
+native/cef_bridge/build/
+**/*.obj
+**/*.pdb
+**/*.ilk
+**/*.exp
+**/*.lib
+**/CMakeCache.txt
+**/CMakeFiles/
+
+# Rust
+src-tauri/target/
+**/*.rs.bk
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# Tauri build output
+src-tauri/gen/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+*.log
+
+# Strata local data (never commit user browsing data)
+.strata/
