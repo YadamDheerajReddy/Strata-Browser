@@ -4,6 +4,7 @@
 #include <list>
 
 #include "include/cef_client.h"
+#include "include/cef_keyboard_handler.h"
 
 // Phase 0 minimal CefClient. Tracks the single browser instance so the
 // native host window (main.cpp) can resize and close it, and quits the
@@ -13,7 +14,8 @@
 class StrataClient : public CefClient,
                       public CefLifeSpanHandler,
                       public CefDisplayHandler,
-                      public CefLoadHandler {
+                      public CefLoadHandler,
+                      public CefKeyboardHandler {
  public:
   StrataClient();
 
@@ -21,6 +23,7 @@ class StrataClient : public CefClient,
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+  CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
 
   // CefLifeSpanHandler methods:
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
@@ -40,6 +43,16 @@ class StrataClient : public CefClient,
                     ErrorCode errorCode,
                     const CefString& errorText,
                     const CefString& failedUrl) override;
+
+  // CefKeyboardHandler methods:
+  // The CEF browser is a *child* HWND that owns keyboard focus once created
+  // — the host window's own WndProc never sees key presses while a page is
+  // focused, so app-level shortcuts have to be intercepted here rather than
+  // in main.cpp's WM_KEYDOWN handler.
+  bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                      const CefKeyEvent& event,
+                      CefEventHandle os_event,
+                      bool* is_keyboard_shortcut) override;
 
   // Returns the tracked browser, or nullptr if none exists yet / anymore.
   CefRefPtr<CefBrowser> GetFirstBrowser();

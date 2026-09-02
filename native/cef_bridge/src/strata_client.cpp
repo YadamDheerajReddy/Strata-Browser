@@ -77,6 +77,46 @@ void StrataClient::OnLoadError(CefRefPtr<CefBrowser> browser,
   OutputDebugStringA(msg.c_str());
 }
 
+bool StrataClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                                  const CefKeyEvent& event,
+                                  CefEventHandle os_event,
+                                  bool* is_keyboard_shortcut) {
+  CEF_REQUIRE_UI_THREAD();
+  // Only act on the initial "key went down" notification, not the repeats
+  // or the follow-up KEYDOWN/CHAR events CEF also fires for the same press.
+  if (event.type != KEYEVENT_RAWKEYDOWN) {
+    return false;
+  }
+  const bool alt_down = (event.modifiers & EVENTFLAG_ALT_DOWN) != 0;
+  switch (event.windows_key_code) {
+    case VK_F5:
+      browser->Reload();
+      return true;
+    case '1':
+      browser->GetMainFrame()->LoadURL("https://example.com");
+      return true;
+    case '2':
+      browser->GetMainFrame()->LoadURL(
+          "https://en.wikipedia.org/wiki/Chromium_(web_browser)");
+      return true;
+    case VK_LEFT:
+      if (alt_down) {
+        browser->GoBack();
+        return true;
+      }
+      break;
+    case VK_RIGHT:
+      if (alt_down) {
+        browser->GoForward();
+        return true;
+      }
+      break;
+    default:
+      break;
+  }
+  return false;
+}
+
 CefRefPtr<CefBrowser> StrataClient::GetFirstBrowser() {
   if (!browser_list_.empty()) {
     return browser_list_.front();

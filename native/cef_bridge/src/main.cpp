@@ -17,6 +17,10 @@
 //   F5       -> reload
 //   Alt+Left / Alt+Right -> back / forward
 //   closing the window   -> clean CEF shutdown
+//
+// These are implemented in StrataClient::OnPreKeyEvent (strata_client.cpp),
+// not here — the CEF browser is a *child* HWND that owns keyboard focus once
+// created, so this window's own WndProc never sees the key presses.
 
 #include <windows.h>
 
@@ -56,44 +60,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_SIZE:
       ResizeBrowserToClientArea(hwnd);
       return 0;
-
-    case WM_KEYDOWN: {
-      if (!g_client.get()) {
-        break;
-      }
-      CefRefPtr<CefBrowser> browser = g_client->GetFirstBrowser();
-      if (!browser.get()) {
-        break;
-      }
-      const bool alt_down = (GetKeyState(VK_MENU) & 0x8000) != 0;
-      switch (wparam) {
-        case VK_F5:
-          browser->Reload();
-          return 0;
-        case '1':
-          browser->GetMainFrame()->LoadURL("https://example.com");
-          return 0;
-        case '2':
-          browser->GetMainFrame()->LoadURL(
-              "https://en.wikipedia.org/wiki/Chromium_(web_browser)");
-          return 0;
-        case VK_LEFT:
-          if (alt_down) {
-            browser->GoBack();
-            return 0;
-          }
-          break;
-        case VK_RIGHT:
-          if (alt_down) {
-            browser->GoForward();
-            return 0;
-          }
-          break;
-        default:
-          break;
-      }
-      break;
-    }
 
     case WM_CLOSE: {
       if (g_client.get()) {
