@@ -40,17 +40,102 @@ STRATA_API int strata_cef_initialize(void);
 // Never blocks.
 STRATA_API void strata_cef_do_message_loop_work(void);
 
+// Registers the function CEF calls whenever OnPreKeyEvent recognizes a
+// chrome-level keyboard shortcut (Ctrl+T, Ctrl+H, ...) — see
+// strata_client.h for the full list of action names this can pass.
+// browser_id identifies which browser (and therefore which OS window, once
+// more than one exists — see strata_cef_create_browser) the keypress came
+// from, so Rust knows which window's frontend to forward the shortcut to.
+// Call once during startup, before creating any browsers, from the same
+// thread as strata_cef_initialize(). The callback itself will later be
+// invoked from that same thread (inside OnPreKeyEvent), whenever a page has
+// keyboard focus and the user presses one of these combinations.
+STRATA_API void strata_cef_set_shortcut_callback(
+    void (*callback)(unsigned long long browser_id, const char* action));
+
+// Registers the function CEF calls to report download activity — once from
+// OnBeforeDownload (state="started") and again on every subsequent update
+// (state="in_progress", then "completed" or "cancelled"). download_id is
+// CEF's own id for that download, stable across every call for the same
+// download. browser_id identifies which tab started it (0 if unknown).
+// file_path is the real path on disk (in the OS Downloads folder, already
+// de-duplicated against existing files — see strata_client.cpp) that the
+// file is being/was written to. Call once during startup, same thread rules
+// as strata_cef_set_shortcut_callback.
+STRATA_API void strata_cef_set_download_callback(
+    void (*callback)(unsigned long long download_id,
+                      unsigned long long browser_id,
+                      const char* state,
+                      const char* url,
+                      const char* file_path,
+                      const char* file_name,
+                      long long received_bytes,
+                      long long total_bytes));
+
+// Registers the function CEF calls whenever a page tries to open a popup
+// (target="_blank" link, window.open(), "open in new tab/window" from the
+// context menu) — browser_id is the tab it came from, url is where it
+// wanted to go. Without a registered callback (or if the frontend doesn't
+// act on it), the popup is still cancelled — it just goes nowhere, which is
+// still better than CEF's undecorated default popup window. Call once
+// during startup, same thread rules as strata_cef_set_shortcut_callback.
+STRATA_API void strata_cef_set_popup_callback(
+    void (*callback)(unsigned long long browser_id, const char* url));
+
+// Registers the function CEF calls whenever a page asks for something that
+// needs the user's permission (camera, microphone, location, notifications,
+// ...) — see strata_client.cpp for exactly which requests are covered.
+// Without a registered callback, Alloy style's own default is to silently
+// deny (media) or ignore (everything else) every such request, which is
+// why sites asking for the camera/microphone previously just... did
+// nothing. request_id uniquely identifies this request for the matching
+// strata_cef_respond_permission call; browser_id is which tab asked;
+// kind is a short human-readable label ("camera", "microphone", "camera
+// and microphone", "location", "notifications", or "a permission" for
+// anything else) meant to be shown directly in a prompt.
+STRATA_API void strata_cef_set_permission_callback(
+    void (*callback)(unsigned long long request_id,
+                      unsigned long long browser_id,
+                      const char* origin,
+                      const char* kind));
+
+// Answers a pending permission request from strata_cef_set_permission_callback.
+// allow non-zero grants everything that was asked for; zero denies it.
+// Calling this with an unknown/already-answered request_id is a silent
+// no-op — the request may have already been dismissed by the page
+// navigating away or the tab closing.
+STRATA_API void strata_cef_respond_permission(unsigned long long request_id,
+                                               int allow);
+
 // Creates a browser embedded as a child window of parent_hwnd, filling the
 // rectangle (x, y, width, height) in that parent's client coordinates
 // (top-left origin), and navigates it to url. Returns a browser id (> 0)
 // on success, 0 on failure. The returned id is CEF's own browser
 // identifier — stable for the browser's lifetime, meaningless afterward.
-STRATA_API unsigned long long strata_cef_create_browser(void* parent_hwnd,
-                                                          int x,
-                                                          int y,
-                                                          int width,
-                                                          int height,
-                                                          const char* url);
+//
+// When is_private is non-zero, the browser uses a shared, in-memory-only
+// CefRequestContext (no cache_path) instead of the global persistent one —
+// its cookies/storage/cache vanish once every private browser using it has
+// closed, and are never written to disk. Rust separately skips history
+// recording for tabs it knows are private (see App Flow doc, Private
+// Browsing). is_private takes priority over profile_cache_path below.
+//
+// profile_cache_path, when non-null and is_private is 0, gives this
+// browser its own persistent CefRequestContext rooted at that directory —
+// a real isolation boundary between named profiles (Implementation Plan
+// Phase 2), not just separate rows in Strata's own history/bookmarks
+// tables. Pass null to use CEF's own global default context instead, which
+// is what the original default profile keeps doing (see lib.rs's
+// create_tab) so its existing on-disk data never moves.
+STRATA_API unsigned long long strata_cef_create_browser(
+    void* parent_hwnd,
+    int x,
+    int y,
+    int width,
+    int height,
+    const char* url,
+    int is_private,
+    const char* profile_cache_path);
 
 // Repositions/resizes an existing browser's native window within its
 // parent. Used both for window-resize handling and for tab switching
@@ -88,14 +173,19 @@ typedef struct {
   int is_loading;
 } strata_tab_state_t;
 
-// Returns 1 and fills out_state/url_buf/title_buf if browser_id is valid,
-// 0 otherwise (e.g. the browser already closed).
+// Returns 1 and fills out_state/url_buf/title_buf/favicon_buf if
+// browser_id is valid, 0 otherwise (e.g. the browser already closed).
+// favicon_buf is set to an empty string until the page announces one via
+// a <link rel="icon">-style tag (or never, for pages that don't) — the
+// frontend loads whatever URL lands here directly as an <img src>.
 STRATA_API int strata_cef_get_tab_state(unsigned long long browser_id,
                                          strata_tab_state_t* out_state,
                                          char* url_buf,
                                          int url_buf_len,
                                          char* title_buf,
-                                         int title_buf_len);
+                                         int title_buf_len,
+                                         char* favicon_buf,
+                                         int favicon_buf_len);
 
 // Shuts CEF down. Call once, after every browser has been closed, right
 // before process exit. Do not call any other function afterward.

@@ -3,6 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // tauri_build::build() re-embeds icons/icon.ico into the .exe, but once
+    // build_and_link_cef_bridge() below emits its own cargo:rerun-if-changed
+    // directives, Cargo stops rerunning this script on ANY change by
+    // default and only reruns for paths *something* explicitly declared —
+    // and nothing declares the icons/ directory, so a plain icon swap
+    // silently kept embedding the old one until the next unrelated
+    // rebuild. Declaring it here closes that gap.
+    println!("cargo:rerun-if-changed=icons");
     tauri_build::build();
     build_and_link_cef_bridge();
 }
@@ -96,12 +104,21 @@ fn copy_dir_flat(src: &Path, dst: &Path) {
             continue;
         }
 
-        // Skip re-copying identically-sized files — avoids re-copying the
-        // ~285MB libcef.dll on every incremental build when nothing in the
-        // bridge actually changed.
+        // Skip re-copying a file that's already up to date — avoids
+        // re-copying the ~285MB libcef.dll on every incremental build when
+        // nothing in the bridge actually changed. Size alone isn't enough
+        // to prove that: a small source edit (e.g. one new field
+        // assignment) can easily recompile to a byte-identical file size,
+        // which silently left a stale strata_cef_bridge.dll in place here
+        // across multiple rebuilds while every fix inside it appeared to
+        // do nothing. Requiring the destination's mtime to be at least as
+        // new as the source's closes that gap.
         let already_current = std::fs::metadata(&dest_path)
-            .and_then(|dest_meta| Ok((dest_meta.len(), std::fs::metadata(&path)?.len())))
-            .map(|(a, b)| a == b)
+            .and_then(|dest_meta| {
+                let src_meta = std::fs::metadata(&path)?;
+                Ok(dest_meta.len() == src_meta.len()
+                    && dest_meta.modified()? >= src_meta.modified()?)
+            })
             .unwrap_or(false);
 
         if !already_current {

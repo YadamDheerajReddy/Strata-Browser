@@ -1,18 +1,59 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useProfilesStore } from "./profilesStore";
 import type { Tab } from "../types/tab";
 
 let nextTabSeq = 1;
 
-function makeTab(browserId: number, url: string): Tab {
+function makeTab(browserId: number, url: string, isPrivate: boolean): Tab {
   return {
     id: `tab_${nextTabSeq++}`,
     browserId,
+    kind: "web",
     title: "New Tab",
     url,
     isLoading: true,
     canGoBack: false,
     canGoForward: false,
+    faviconUrl: null,
+    isPrivate,
+  };
+}
+
+function makeInternalTab(kind: "history" | "downloads"): Tab {
+  return {
+    id: `tab_${nextTabSeq++}`,
+    browserId: null,
+    kind,
+    title: kind === "history" ? "History" : "Downloads",
+    url: kind === "history" ? "strata://history" : "strata://downloads",
+    isLoading: false,
+    canGoBack: false,
+    canGoForward: false,
+    faviconUrl: null,
+    isPrivate: false,
+  };
+}
+
+// What a fresh tab actually starts as (Ctrl+T, the "+" button, first
+// launch) — Strata's own home page instead of a real page, no CEF browser
+// behind it until the user searches/navigates from it (see
+// navigateFromHome below). HomePage hides "Continue" for a private one —
+// no point showing real browsing history on a page whose whole point is
+// not leaving a trace.
+function makeHomeTab(isPrivate: boolean): Tab {
+  return {
+    id: `tab_${nextTabSeq++}`,
+    browserId: null,
+    kind: "home",
+    title: "New Tab",
+    url: "",
+    isLoading: false,
+    canGoBack: false,
+    canGoForward: false,
+    faviconUrl: null,
+    isPrivate,
   };
 }
 
@@ -22,42 +63,102 @@ interface BackendTabState {
   canGoBack: boolean;
   canGoForward: boolean;
   isLoading: boolean;
+  faviconUrl: string | null;
 }
 
 interface TabsState {
   tabs: Tab[];
   activeTabId: string | null;
 
-  addTab: (url?: string) => Promise<string>;
-  closeTab: (id: string) => Promise<void>;
+  addTab: (url?: string, isPrivate?: boolean) => Promise<string>;
+  openInternalTab: (kind: "history" | "downloads") => Promise<string>;
+  navigateFromHome: (id: string, url: string) => Promise<void>;
+  // quitIfEmpty lets internal callers (ProfileSwitcher's tab reset) close
+  // every tab in a batch without triggering the window close each one
+  // would otherwise cause the moment the batch happens to hit zero — see
+  // the implementation below.
+  closeTab: (id: string, opts?: { quitIfEmpty?: boolean }) => Promise<void>;
   setActiveTab: (id: string) => Promise<void>;
   updateTab: (id: string, patch: Partial<Tab>) => void;
   refreshTabState: (id: string) => Promise<void>;
 }
 
-// Strata's real homepage (search field + Continue + Moments rows, per
-// UI/UX Brief §7) needs Continuum data that doesn't exist until Phase 3/4
-// — new tabs land on a plain working page until then.
-const DEFAULT_URL = "https://www.google.com";
+// Puts the right CEF browser on screen — or, for a History/Downloads/Home
+// tab, none at all (see set_panel_open in lib.rs for why those need the
+// whole webview instead of just the content strip) — for whichever tab
+// just became active. Every place that changes activeTabId funnels through
+// this so there's exactly one spot that knows how to reconcile the two.
+async function syncBackendForActiveTab(tab: Tab | undefined) {
+  if (!tab) return;
+  if (tab.kind === "web") {
+    if (tab.browserId != null) {
+      await invoke("activate_tab", { browserId: tab.browserId });
+    }
+    await invoke("set_panel_open", { open: false });
+  } else {
+    await invoke("set_panel_open", { open: true });
+  }
+}
 
 export const useTabsStore = create<TabsState>((set, get) => ({
   tabs: [],
   activeTabId: null,
 
-  addTab: async (url = DEFAULT_URL) => {
-    const browserId = await invoke<number>("create_tab", { url });
-    const tab = makeTab(browserId, url);
+  // No url (Ctrl+T, the "+" button, first launch) lands on Strata's own
+  // home page instead of creating a CEF browser at all — see makeHomeTab
+  // and navigateFromHome. isPrivate defaults to whether the window is
+  // currently in Guest mode (profilesStore) — every tab in a Guest session
+  // is private, the same way every tab in a real browser's Guest window is.
+  addTab: async (url, isPrivate = useProfilesStore.getState().isGuest) => {
+    if (url == null) {
+      const tab = makeHomeTab(isPrivate);
+      set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
+      await syncBackendForActiveTab(tab);
+      return tab.id;
+    }
+    const browserId = await invoke<number>("create_tab", { url, isPrivate });
+    const tab = makeTab(browserId, url, isPrivate);
     set((state) => ({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id,
     }));
-    // create_tab only creates+positions the browser; activate_tab is what
-    // hides whatever tab was visible before and shows this one.
-    await invoke("activate_tab", { browserId });
+    await syncBackendForActiveTab(tab);
     return tab.id;
   },
 
-  closeTab: async (id) => {
+  // History/Downloads always open as a fresh tab (App Flow doc: "a new
+  // page"), matching how a real browser's chrome://history behaves rather
+  // than the toggleable overlay panel this used to be.
+  openInternalTab: async (kind) => {
+    const tab = makeInternalTab(kind);
+    set((state) => ({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+    }));
+    await syncBackendForActiveTab(tab);
+    return tab.id;
+  },
+
+  // Turns a home tab into a real page in place — searching/navigating from
+  // Strata's home page replaces it with the result rather than opening a
+  // second tab, matching how every browser's own new-tab page behaves.
+  navigateFromHome: async (id, url) => {
+    const tab = get().tabs.find((t) => t.id === id);
+    if (!tab || tab.kind !== "home") return;
+    const browserId = await invoke<number>("create_tab", { url, isPrivate: tab.isPrivate });
+    get().updateTab(id, {
+      kind: "web",
+      browserId,
+      url,
+      title: "New Tab",
+      isLoading: true,
+    });
+    if (get().activeTabId === id) {
+      await syncBackendForActiveTab(get().tabs.find((t) => t.id === id));
+    }
+  },
+
+  closeTab: async (id, opts) => {
     const { tabs, activeTabId } = get();
     const index = tabs.findIndex((t) => t.id === id);
     if (index === -1) return;
@@ -72,11 +173,25 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     }
 
     set({ tabs: remaining, activeTabId: nextActiveId });
-    await invoke("close_tab", { browserId: closed.browserId });
+    lastRecordedUrls.delete(id);
+    if (closed.browserId != null) {
+      await invoke("close_tab", { browserId: closed.browserId });
+    }
+
+    // Closing the last tab closes Strata itself, matching how closing the
+    // last window works in most browsers — App Flow doc's "no separate
+    // empty-browser state" bias. quitIfEmpty:false is for internal batch
+    // closes (ProfileSwitcher resetting tabs before adding a fresh one)
+    // that would otherwise hit zero tabs mid-sequence and quit too early.
+    if (remaining.length === 0) {
+      if (opts?.quitIfEmpty === false) return;
+      await getCurrentWindow().close();
+      return;
+    }
 
     if (nextActiveId) {
       const next = remaining.find((t) => t.id === nextActiveId);
-      if (next) await invoke("activate_tab", { browserId: next.browserId });
+      await syncBackendForActiveTab(next);
     }
   },
 
@@ -84,7 +199,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (get().activeTabId === id) return;
     set({ activeTabId: id });
     const tab = get().tabs.find((t) => t.id === id);
-    if (tab) await invoke("activate_tab", { browserId: tab.browserId });
+    await syncBackendForActiveTab(tab);
   },
 
   updateTab: (id, patch) =>
@@ -93,12 +208,14 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     })),
 
   // Polls the real CEF-side navigation state (title/url/back/forward/
-  // loading) for one tab and syncs it into the store — see App.tsx's
-  // polling loop. There's no push-based event for this yet (Phase 1
-  // simplification); Phase 2+ can replace this with a real callback.
+  // loading/favicon) for one tab and syncs it into the store — see
+  // App.tsx's polling loop. There's no push-based event for this yet
+  // (Phase 1/2 simplification); Phase 3's EventRecorder is where a proper
+  // one belongs. Internal (History/Downloads) tabs have no CEF browser to
+  // poll.
   refreshTabState: async (id) => {
     const tab = get().tabs.find((t) => t.id === id);
-    if (!tab) return;
+    if (!tab || tab.kind !== "web" || tab.browserId == null) return;
     const backendState = await invoke<BackendTabState | null>("get_tab_state", {
       browserId: tab.browserId,
     });
@@ -109,6 +226,33 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       canGoBack: backendState.canGoBack,
       canGoForward: backendState.canGoForward,
       isLoading: backendState.isLoading,
+      faviconUrl: backendState.faviconUrl,
     });
+
+    // History (Phase 2): record once a navigation to a *new* URL settles
+    // (not loading, has a real title) — piggybacking on this same poll
+    // rather than a dedicated CEF-side event, since that's exactly what
+    // Phase 3's EventRecorder is scoped to build properly. Private tabs
+    // (App Flow doc §9) never get recorded at all.
+    if (
+      !tab.isPrivate &&
+      !backendState.isLoading &&
+      backendState.title &&
+      backendState.url &&
+      backendState.url !== "about:blank" &&
+      lastRecordedUrls.get(id) !== backendState.url
+    ) {
+      lastRecordedUrls.set(id, backendState.url);
+      void invoke("record_visit", {
+        tabId: id,
+        url: backendState.url,
+        title: backendState.title,
+        faviconUrl: backendState.faviconUrl,
+      });
+    }
   },
 }));
+
+// Per-tab "last URL we wrote to history" — internal bookkeeping only, kept
+// out of the Tab type so components don't need to know about it.
+const lastRecordedUrls = new Map<string, string>();

@@ -1,7 +1,19 @@
-import { useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, Lock, RotateCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Download,
+  History,
+  Lock,
+  RotateCw,
+  Search,
+  ShieldCheck,
+  Star,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTabsStore } from "../stores/tabsStore";
+import { useBookmarksStore } from "../stores/bookmarksStore";
 
 // Back/forward/reload + the address bar — UI/UX Brief §4: "one field, no
 // separate search box." The Rewind (Continuum) control that sits at the far
@@ -11,8 +23,20 @@ export function NavBar() {
   const tabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const activeTab = tabs.find((t) => t.id === activeTabId);
+  // No CEF browser behind any of these, so back/forward/reload never apply.
+  const isInternal = activeTab != null && activeTab.kind !== "web";
+  // History/Downloads render as a read-only label instead of the address
+  // bar; Home keeps the normal editable bar (see commitNavigation) since
+  // it's still a place you type a search/address into.
+  const isReadOnlyPage = activeTab?.kind === "history" || activeTab?.kind === "downloads";
+
+  const currentBookmark = useBookmarksStore((s) => s.currentBookmark);
+  const checkCurrent = useBookmarksStore((s) => s.checkCurrent);
+  const toggleBookmark = useBookmarksStore((s) => s.toggle);
+  const navigateFromHome = useTabsStore((s) => s.navigateFromHome);
 
   const [draft, setDraft] = useState(activeTab?.url ?? "");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Keep the address field in sync when the active tab changes (but not
   // while the user is mid-edit of the current tab's own URL).
@@ -20,59 +44,137 @@ export function NavBar() {
     setDraft(activeTab?.url ?? "");
   }, [activeTab?.id, activeTab?.url]);
 
+  // Ctrl+L (App.tsx's global shortcut handler) focuses the address bar via
+  // this event rather than a prop/ref threaded down from App — the two
+  // components don't otherwise need to know about each other.
+  useEffect(() => {
+    const focusAndSelect = () => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener("strata:focus-address-bar", focusAndSelect);
+    return () => window.removeEventListener("strata:focus-address-bar", focusAndSelect);
+  }, []);
+
+  // Keep the star's filled/outline state matching the active tab's actual
+  // URL (not the draft — a half-typed address bar shouldn't flip the star).
+  useEffect(() => {
+    if (activeTab?.kind === "web" && activeTab.url) void checkCurrent(activeTab.url);
+  }, [activeTab?.kind, activeTab?.url, checkCurrent]);
+
   const commitNavigation = () => {
     if (!activeTab || !draft.trim()) return;
     const url = normalizeUrl(draft.trim());
-    invoke("navigate", { browserId: activeTab.browserId, url });
+    if (activeTab.kind === "web" && activeTab.browserId != null) {
+      invoke("navigate", { browserId: activeTab.browserId, url });
+    } else if (activeTab.kind === "home") {
+      void navigateFromHome(activeTab.id, url);
+    }
   };
 
   return (
-    <div className="flex h-12 items-center gap-2 bg-[color:var(--color-bg)] px-3">
+    <div className="relative flex h-12 items-center gap-2 bg-[color:var(--color-bg)] px-3">
+      <AnimatePresence>
+        {activeTab?.isLoading && (
+          <motion.div
+            key="loading-bar"
+            className="absolute bottom-0 left-0 h-0.5 bg-[color:var(--color-accent)]"
+            initial={{ width: "0%", opacity: 1 }}
+            animate={{ width: ["0%", "75%", "92%"], opacity: 1 }}
+            exit={{ width: "100%", opacity: 0, transition: { duration: 0.2 } }}
+            transition={{ duration: 1.4, ease: "easeOut" }}
+          />
+        )}
+      </AnimatePresence>
+
       <div className="flex items-center gap-0.5">
         <NavButton
           label="Back"
-          disabled={!activeTab?.canGoBack}
+          disabled={isInternal || !activeTab?.canGoBack}
           onClick={() => {
-            if (activeTab) invoke("go_back", { browserId: activeTab.browserId });
+            if (activeTab?.kind === "web") invoke("go_back", { browserId: activeTab.browserId });
           }}
         >
           <ArrowLeft size={16} strokeWidth={1.75} />
         </NavButton>
         <NavButton
           label="Forward"
-          disabled={!activeTab?.canGoForward}
+          disabled={isInternal || !activeTab?.canGoForward}
           onClick={() => {
-            if (activeTab) invoke("go_forward", { browserId: activeTab.browserId });
+            if (activeTab?.kind === "web") invoke("go_forward", { browserId: activeTab.browserId });
           }}
         >
           <ArrowRight size={16} strokeWidth={1.75} />
         </NavButton>
         <NavButton
           label="Reload"
+          disabled={isInternal}
           onClick={() => {
-            if (activeTab) invoke("reload_tab", { browserId: activeTab.browserId });
+            if (activeTab?.kind === "web") invoke("reload_tab", { browserId: activeTab.browserId });
           }}
         >
           <RotateCw size={14} strokeWidth={1.75} />
         </NavButton>
       </div>
 
-      <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-3">
-        <Lock
-          size={13}
-          strokeWidth={1.75}
-          className="shrink-0 text-[color:var(--color-text-secondary)]"
-        />
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitNavigation();
-          }}
-          placeholder="Search or enter address"
-          className="flex-1 bg-transparent text-sm text-[color:var(--color-text-primary)] outline-none placeholder:text-[color:var(--color-text-secondary)]"
-        />
-      </div>
+      {isReadOnlyPage ? (
+        <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-3 text-sm text-[color:var(--color-text-secondary)]">
+          {activeTab.kind === "history" ? (
+            <History size={13} strokeWidth={1.75} className="shrink-0" />
+          ) : (
+            <Download size={13} strokeWidth={1.75} className="shrink-0" />
+          )}
+          <span>{activeTab.title}</span>
+        </div>
+      ) : (
+        <div className="flex h-8 flex-1 items-center gap-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-3">
+          {activeTab?.kind === "home" ? (
+            <Search
+              size={13}
+              strokeWidth={1.75}
+              className="shrink-0 text-[color:var(--color-text-secondary)]"
+            />
+          ) : (
+            <Lock
+              size={13}
+              strokeWidth={1.75}
+              className="shrink-0 text-[color:var(--color-text-secondary)]"
+            />
+          )}
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitNavigation();
+            }}
+            placeholder="Search or enter address"
+            className="flex-1 bg-transparent text-sm text-[color:var(--color-text-primary)] outline-none placeholder:text-[color:var(--color-text-secondary)]"
+          />
+          {activeTab?.isPrivate && (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[color:var(--color-accent)]/15 px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent)]">
+              <ShieldCheck size={11} strokeWidth={2} />
+              Safe Browsing
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
+            disabled={!activeTab?.url}
+            onClick={() => {
+              if (activeTab?.url) void toggleBookmark(activeTab.url, activeTab.title);
+            }}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)] disabled:opacity-30"
+          >
+            <Star
+              size={14}
+              strokeWidth={1.75}
+              fill={currentBookmark ? "currentColor" : "none"}
+              className={currentBookmark ? "text-[color:var(--color-accent)]" : undefined}
+            />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

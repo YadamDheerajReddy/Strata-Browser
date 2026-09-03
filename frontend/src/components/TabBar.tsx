@@ -1,18 +1,29 @@
-import { Plus, X } from "lucide-react";
+import { useState } from "react";
+import { motion } from "framer-motion";
+import { Download, Globe, History, Loader2, Plus, Search, VenetianMask, X } from "lucide-react";
 import { useTabsStore } from "../stores/tabsStore";
 import type { Tab } from "../types/tab";
 
 // Pill-shaped tabs with the three quiet states from UI/UX Brief §4: normal
-// (teal dot), active (elevated surface + accent ring), changed (amber dot —
-// not wired up yet since it needs Continuum's background-update tracking
-// from Phase 3, so every tab shows as normal or active for now).
+// (favicon/globe), active (elevated surface + accent ring), changed (amber
+// dot — not wired up yet since it needs Continuum's background-update
+// tracking from Phase 3). Loading shows a small spinner in place of the
+// favicon (UI/UX Brief §8: motion should confirm state, not decorate).
+// History/Downloads/Home tabs get a fixed icon instead — they're not real
+// pages, so there's no favicon or loading state to show. A private tab
+// additionally gets a mask badge next to its icon (App Flow doc, Private
+// Browsing) — the only per-tab signal that it won't be recorded.
 function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
   const setActiveTab = useTabsStore((s) => s.setActiveTab);
   const closeTab = useTabsStore((s) => s.closeTab);
+  const [faviconFailed, setFaviconFailed] = useState(false);
 
   return (
-    <button
+    <motion.button
       type="button"
+      initial={{ scale: 0.98, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      transition={{ duration: 0.15 }}
       onClick={() => setActiveTab(tab.id)}
       className={`group relative flex h-8 max-w-52 min-w-32 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors ${
         isActive
@@ -20,13 +31,37 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
           : "text-[color:var(--color-text-secondary)] hover:bg-[color:var(--color-surface-2)]/60"
       }`}
     >
-      <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          tab.isLoading
-            ? "animate-pulse bg-[color:var(--color-text-secondary)]"
-            : "bg-[color:var(--color-accent-2)]"
-        }`}
-      />
+      {tab.kind === "history" ? (
+        <History size={13} strokeWidth={1.75} className="shrink-0 text-[color:var(--color-text-secondary)]" />
+      ) : tab.kind === "downloads" ? (
+        <Download size={13} strokeWidth={1.75} className="shrink-0 text-[color:var(--color-text-secondary)]" />
+      ) : tab.kind === "home" ? (
+        <Search size={13} strokeWidth={1.75} className="shrink-0 text-[color:var(--color-text-secondary)]" />
+      ) : tab.isLoading ? (
+        <Loader2
+          size={13}
+          strokeWidth={2}
+          className="shrink-0 animate-spin text-[color:var(--color-text-secondary)]"
+        />
+      ) : tab.faviconUrl && !faviconFailed ? (
+        <img
+          src={tab.faviconUrl}
+          alt=""
+          className="h-3.5 w-3.5 shrink-0 rounded-sm"
+          onError={() => setFaviconFailed(true)}
+        />
+      ) : (
+        <Globe size={13} strokeWidth={1.75} className="shrink-0 text-[color:var(--color-text-secondary)]" />
+      )}
+
+      {tab.isPrivate && (
+        <VenetianMask
+          size={12}
+          strokeWidth={1.75}
+          className="shrink-0 text-[color:var(--color-accent)]"
+        />
+      )}
+
       <span className="flex-1 truncate text-left">{tab.title}</span>
       <span
         role="button"
@@ -39,7 +74,7 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
       >
         <X size={12} strokeWidth={2} />
       </span>
-    </button>
+    </motion.button>
   );
 }
 
@@ -53,7 +88,12 @@ export function TabBar() {
       data-tauri-drag-region
       className="flex h-11 items-center gap-1 border-b border-[color:var(--color-border)] bg-[color:var(--color-bg)] px-2"
     >
-      <div className="flex flex-1 items-center gap-1 overflow-x-auto">
+      {/* min-w-0 (not flex-1) so this only takes as much width as the tabs
+          actually need — the "+" button sits right after the last tab
+          instead of being pushed to the far right of the window, but this
+          can still shrink and scroll internally once there are enough tabs
+          to fill the available space. */}
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => (
           <TabPill key={tab.id} tab={tab} isActive={tab.id === activeTabId} />
         ))}
@@ -65,6 +105,15 @@ export function TabBar() {
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[color:var(--color-text-secondary)] transition-colors hover:bg-[color:var(--color-surface-2)] hover:text-[color:var(--color-text-primary)]"
       >
         <Plus size={16} strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        aria-label="New private tab"
+        title="New private tab (Ctrl+Shift+N)"
+        onClick={() => addTab(undefined, true)}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[color:var(--color-text-secondary)] transition-colors hover:bg-[color:var(--color-surface-2)] hover:text-[color:var(--color-text-primary)]"
+      >
+        <VenetianMask size={15} strokeWidth={1.75} />
       </button>
     </div>
   );

@@ -52,7 +52,10 @@ add_library(strata_cef_bridge SHARED ${STRATA_BRIDGE_SRCS})
 target_include_directories(strata_cef_bridge PRIVATE include)
 
 add_dependencies(strata_cef_bridge libcef_dll_wrapper)
-target_link_libraries(strata_cef_bridge libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS})
+# shell32/ole32: SHGetKnownFolderPath, used to resolve the real OS Downloads
+# folder for OnBeforeDownload (see strata_client.cpp) — not guaranteed to
+# already be pulled in by CEF_STANDARD_LIBS.
+target_link_libraries(strata_cef_bridge libcef_lib libcef_dll_wrapper ${CEF_STANDARD_LIBS} shell32 ole32)
 
 SET_LIBRARY_TARGET_PROPERTIES(strata_cef_bridge)
 

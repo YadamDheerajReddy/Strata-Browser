@@ -14,9 +14,22 @@
  * OS system-UI stack (Segoe UI on Windows) rather than bundling or fetching
  * Inter — visually in the same family, zero network dependency.
  */
+/* Michroma, for the STRATA wordmark on HomePage only — self-hosted (see
+ * assets/fonts/) rather than linked from fonts.googleapis.com, same
+ * zero-network-dependency reasoning as --font-sans above.
+ */
+@font-face {
+  font-family: "Michroma";
+  src: url("./assets/fonts/Michroma-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
   --font-sans: "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto,
     sans-serif;
+  --font-wordmark: "Michroma", var(--font-sans);
 
   --color-bg: #0b0c10;
   --color-surface: #12141a;
@@ -61,4 +74,55 @@ body {
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--color-text-secondary);
+}
+
+/* Slow-drifting blurred color blobs behind HomePage.tsx — the one place in
+   the chrome meant to feel like a premium destination rather than quiet
+   background UI (see that file's comment). Pure CSS, no JS animation loop. */
+.aurora-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.28;
+  will-change: transform;
+}
+.aurora-blob-1 {
+  top: -10%;
+  left: 8%;
+  width: 32rem;
+  height: 32rem;
+  background: var(--color-accent);
+  animation: aurora-drift-1 22s ease-in-out infinite;
+}
+.aurora-blob-2 {
+  top: 20%;
+  right: 5%;
+  width: 26rem;
+  height: 26rem;
+  background: var(--color-accent-2);
+  animation: aurora-drift-2 26s ease-in-out infinite;
+}
+.aurora-blob-3 {
+  bottom: -15%;
+  left: 35%;
+  width: 28rem;
+  height: 28rem;
+  background: var(--color-accent);
+  opacity: 0.18;
+  animation: aurora-drift-3 30s ease-in-out infinite;
+}
+@keyframes aurora-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(4%, 6%) scale(1.08); }
+}
+@keyframes aurora-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-6%, 4%) scale(1.05); }
+}
+@keyframes aurora-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(3%, -5%) scale(1.1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aurora-blob { animation: none; }
 }

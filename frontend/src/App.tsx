@@ -1,13 +1,46 @@
 import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { TabBar } from "./components/TabBar";
 import { NavBar } from "./components/NavBar";
 import { WindowControls } from "./components/WindowControls";
+import { HistoryPanel } from "./components/HistoryPanel";
+import { DownloadsPanel } from "./components/DownloadsPanel";
+import { HomePage } from "./components/HomePage";
+import { BookmarksBar } from "./components/BookmarksBar";
+import { Logo } from "./components/Logo";
+import { PermissionPrompt } from "./components/PermissionPrompt";
+import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useTabsStore } from "./stores/tabsStore";
+import { useBookmarksStore } from "./stores/bookmarksStore";
+
+// The full set of chrome-level shortcut actions — shared between the DOM
+// keydown handler (fires when the chrome webview has focus) and the
+// "shortcut" Tauri event (fires when CEF forwards one from a page that has
+// keyboard focus; see strata_client.cpp's OnPreKeyEvent and
+// cef_bridge.rs's set_shortcut_forwarding). Both paths land here so there
+// is exactly one place that knows what each shortcut does.
+type Action =
+  | "new_tab"
+  | "new_private_tab"
+  | "close_tab"
+  | "focus_address_bar"
+  | "reload"
+  | "bookmark"
+  | "history"
+  | "downloads"
+  | "next_tab";
 
 export default function App() {
+  const tabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
+  const activeTab = tabs.find((t) => t.id === activeTabId);
   const addTab = useTabsStore((s) => s.addTab);
+  const openInternalTab = useTabsStore((s) => s.openInternalTab);
+  const closeTab = useTabsStore((s) => s.closeTab);
+  const setActiveTab = useTabsStore((s) => s.setActiveTab);
   const refreshTabState = useTabsStore((s) => s.refreshTabState);
+  const toggleBookmark = useBookmarksStore((s) => s.toggle);
 
   // First launch: land on a single tab (App Flow doc §2 — no account, no
   // setup, straight to browsing). Guarded with a ref rather than
@@ -24,16 +57,138 @@ export default function App() {
   }, []);
 
   // Poll the active tab's real navigation state (title/url/back/forward/
-  // loading) from the CEF side — see tabsStore.refreshTabState for why this
-  // is polling rather than push-based in Phase 1.
+  // loading/favicon) from the CEF side — see tabsStore.refreshTabState for
+  // why this is polling rather than push-based in Phase 1/2. A no-op for
+  // History/Downloads tabs, which have no CEF browser behind them.
   useEffect(() => {
     if (!activeTabId) return;
     const interval = setInterval(() => void refreshTabState(activeTabId), 400);
     return () => clearInterval(interval);
   }, [activeTabId, refreshTabState]);
 
+  // Keep the latest tabs/activeTabId available to the two listeners below
+  // without having to re-subscribe them on every tab change.
+  const latest = useRef({ tabs, activeTabId });
+  latest.current = { tabs, activeTabId };
+
+  const handleAction = (action: Action) => {
+    const { tabs, activeTabId } = latest.current;
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+
+    switch (action) {
+      case "new_tab":
+        void addTab();
+        break;
+      case "new_private_tab":
+        void addTab(undefined, true);
+        break;
+      case "close_tab":
+        if (activeTabId) void closeTab(activeTabId);
+        break;
+      case "focus_address_bar":
+        window.dispatchEvent(new CustomEvent("strata:focus-address-bar"));
+        break;
+      case "reload":
+        if (activeTab?.kind === "web" && activeTab.browserId != null) {
+          invoke("reload_tab", { browserId: activeTab.browserId });
+        }
+        break;
+      case "bookmark":
+        if (activeTab?.kind === "web") void toggleBookmark(activeTab.url, activeTab.title);
+        break;
+      case "history":
+        void openInternalTab("history");
+        break;
+      case "downloads":
+        void openInternalTab("downloads");
+        break;
+      case "next_tab": {
+        if (tabs.length < 2) break;
+        const index = tabs.findIndex((t) => t.id === activeTabId);
+        const next = tabs[(index + 1) % tabs.length];
+        void setActiveTab(next.id);
+        break;
+      }
+    }
+  };
+
+  // Path 1: chrome (React webview) has keyboard focus.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      const action: Action | null =
+        e.shiftKey && key === "n"
+          ? "new_private_tab"
+          : e.shiftKey
+            ? null
+            : key === "t"
+              ? "new_tab"
+              : key === "w"
+                ? "close_tab"
+                : key === "l"
+                  ? "focus_address_bar"
+                  : key === "r"
+                    ? "reload"
+                    : key === "d"
+                      ? "bookmark"
+                      : key === "h"
+                        ? "history"
+                        : key === "j"
+                          ? "downloads"
+                          : key === "tab"
+                            ? "next_tab"
+                            : null;
+      if (action) {
+        e.preventDefault();
+        handleAction(action);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Path 2: a page (CEF content) has keyboard focus — the chrome webview
+  // never sees the keydown at all in that case, so CEF forwards it here.
+  useEffect(() => {
+    const unlisten = listen<string>("shortcut", (event) => {
+      handleAction(event.payload as Action);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A link that tried to open a new tab/window (target="_blank",
+  // window.open(), "open in new tab/window" from the page's own context
+  // menu) lands here — CEF cancels its own default popup unconditionally
+  // (see strata_client.cpp's OnBeforePopup) and forwards the URL instead,
+  // so opening it as a real Strata tab is this app's job, not CEF's.
+  useEffect(() => {
+    const unlisten = listen<string>("open-tab", (event) => {
+      void addTab(event.payload);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Clicking a history entry opens it in a fresh tab and puts the History
+  // page away — there's no CEF browser behind the History tab itself to
+  // navigate.
+  const navigateFromPanel = async (url: string) => {
+    const historyTabId = activeTabId;
+    await addTab(url);
+    if (historyTabId) await closeTab(historyTabId);
+  };
+
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[color:var(--color-bg)]">
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[color:var(--color-bg)]">
+      <PermissionPrompt />
+
       <div
         data-tauri-drag-region
         className="flex h-8 shrink-0 items-center justify-between"
@@ -42,20 +197,31 @@ export default function App() {
           data-tauri-drag-region
           className="flex flex-1 items-center gap-2 pl-3"
         >
-          <div className="h-4 w-4 rounded bg-gradient-to-br from-[color:var(--color-accent)] to-[color:var(--color-accent-2)]" />
+          <Logo size={16} />
           <span className="chrome-label">Strata</span>
+        </div>
+        <div className="flex items-center pr-2">
+          <ProfileSwitcher />
         </div>
         <WindowControls />
       </div>
 
       <TabBar />
       <NavBar />
+      <BookmarksBar />
 
       {/* Content area: the actual webpage is rendered by CEF as a native
           child window layered directly over this region (see TRD §1) —
-          React never draws page content itself. This placeholder exists so
-          the layout/sizing is correct before that embedding is wired up. */}
-      <div className="relative flex-1 bg-[color:var(--color-surface)]" />
+          React never draws page content itself. When the active tab is an
+          internal page (History/Downloads) or the CEF browser is hidden,
+          the Rust side grows this webview to cover the whole window instead
+          (see set_panel_open), so this becomes real usable space rather
+          than a placeholder. */}
+      <div className="relative flex-1 bg-[color:var(--color-surface)]">
+        {activeTab?.kind === "home" && <HomePage tabId={activeTab.id} isPrivate={activeTab.isPrivate} />}
+        {activeTab?.kind === "history" && <HistoryPanel onNavigate={navigateFromPanel} />}
+        {activeTab?.kind === "downloads" && <DownloadsPanel />}
+      </div>
     </div>
   );
 }
