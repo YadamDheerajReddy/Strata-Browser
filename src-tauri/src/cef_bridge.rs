@@ -17,6 +17,8 @@ struct TabStateRaw {
     can_go_back: c_int,
     can_go_forward: c_int,
     is_loading: c_int,
+    scroll_x: f64,
+    scroll_y: f64,
 }
 
 extern "C" {
@@ -374,6 +376,8 @@ pub struct TabState {
     pub can_go_forward: bool,
     pub is_loading: bool,
     pub favicon_url: Option<String>,
+    pub scroll_x: f64,
+    pub scroll_y: f64,
 }
 
 pub fn get_tab_state(browser_id: u64) -> Option<TabState> {
@@ -408,6 +412,8 @@ pub fn get_tab_state(browser_id: u64) -> Option<TabState> {
         can_go_forward: raw.can_go_forward != 0,
         is_loading: raw.is_loading != 0,
         favicon_url: (!favicon_url.is_empty()).then_some(favicon_url),
+        scroll_x: raw.scroll_x,
+        scroll_y: raw.scroll_y,
     })
 }
 

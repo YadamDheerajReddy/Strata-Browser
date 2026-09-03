@@ -64,6 +64,8 @@ interface BackendTabState {
   canGoForward: boolean;
   isLoading: boolean;
   faviconUrl: string | null;
+  scrollX: number;
+  scrollY: number;
 }
 
 interface TabsState {
@@ -114,6 +116,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       const tab = makeHomeTab(isPrivate);
       set((state) => ({ tabs: [...state.tabs, tab], activeTabId: tab.id }));
       await syncBackendForActiveTab(tab);
+      if (!isPrivate) void invoke("record_tab_created", { tabId: tab.id });
       return tab.id;
     }
     const browserId = await invoke<number>("create_tab", { url, isPrivate });
@@ -123,6 +126,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       activeTabId: tab.id,
     }));
     await syncBackendForActiveTab(tab);
+    if (!isPrivate) void invoke("record_tab_created", { tabId: tab.id });
     return tab.id;
   },
 
@@ -250,9 +254,38 @@ export const useTabsStore = create<TabsState>((set, get) => ({
         faviconUrl: backendState.faviconUrl,
       });
     }
+
+    // StateCollector checkpoint (Implementation Plan Phase 3): piggybacks
+    // on this same poll rather than a dedicated scroll-event listener, same
+    // "not a proper push model yet" simplification as history above.
+    // Throttled to roughly the TRD's 500-1000ms debounce window, and only
+    // written when the scroll position actually moved — "record meaningful
+    // state changes, not every pixel."
+    if (!tab.isPrivate && !backendState.isLoading && backendState.url && backendState.url !== "about:blank") {
+      const last = lastScrollCheckpoints.get(id);
+      const now = Date.now();
+      const moved =
+        !last || Math.abs(last.x - backendState.scrollX) > 2 || Math.abs(last.y - backendState.scrollY) > 2;
+      const dueForCheckpoint = !last || now - last.at > 1000;
+      if (moved && dueForCheckpoint) {
+        lastScrollCheckpoints.set(id, { x: backendState.scrollX, y: backendState.scrollY, at: now });
+        void invoke("checkpoint_page_state", {
+          tabId: id,
+          url: backendState.url,
+          title: backendState.title,
+          faviconUrl: backendState.faviconUrl,
+          scrollX: backendState.scrollX,
+          scrollY: backendState.scrollY,
+        });
+      }
+    }
   },
 }));
 
 // Per-tab "last URL we wrote to history" — internal bookkeeping only, kept
 // out of the Tab type so components don't need to know about it.
 const lastRecordedUrls = new Map<string, string>();
+
+// Per-tab last-written scroll checkpoint — see refreshTabState's
+// StateCollector throttle above.
+const lastScrollCheckpoints = new Map<string, { x: number; y: number; at: number }>();

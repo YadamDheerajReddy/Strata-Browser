@@ -87,6 +87,18 @@ class StrataClient : public CefClient,
   void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
                            const std::vector<CefString>& icon_urls) override;
 
+  // CefClient method. CefDisplayHandler::OnScrollOffsetChanged only exists
+  // for OSR (off-screen rendering) browsers per its own docs, and this app
+  // uses windowed (native child-window) rendering — so it's never called
+  // here. Continuum's StateCollector (TRD §4) instead gets the page's real
+  // scroll position via a small JS binding injected in the renderer
+  // process (see strata_app.cpp's OnContextCreated), which reports back
+  // through this process message.
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 CefProcessId source_process,
+                                 CefRefPtr<CefProcessMessage> message) override;
+
   // CefLoadHandler methods (diagnostic logging only — is_loading/can-go-back
   // /forward are queried live off CefBrowser in GetTabState rather than
   // tracked here, since CefBrowser already exposes them directly).
@@ -233,6 +245,11 @@ class StrataClient : public CefClient,
   CefRefPtr<CefBrowser> GetBrowser(int browser_id);
   bool GetTitle(int browser_id, std::string* out_title);
   bool GetFaviconUrl(int browser_id, std::string* out_url);
+  // Latest scroll offset OnScrollOffsetChanged has reported for this
+  // browser, defaulting to (0, 0) for a browser that hasn't scrolled yet —
+  // used by StateCollector's page_states checkpoints (see GetTabState in
+  // strata_bridge.cpp).
+  bool GetScrollOffset(int browser_id, double* out_x, double* out_y);
   void CloseBrowser(int browser_id);
 
  private:
@@ -240,6 +257,8 @@ class StrataClient : public CefClient,
     CefRefPtr<CefBrowser> browser;
     std::string title;
     std::string favicon_url;
+    double scroll_x = 0.0;
+    double scroll_y = 0.0;
   };
 
   // Reverse lookup: the Strata-side id for a CefBrowser, used wherever a

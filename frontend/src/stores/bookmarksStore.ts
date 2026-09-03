@@ -11,7 +11,7 @@ interface BookmarksState {
 
   refresh: () => Promise<void>;
   checkCurrent: (url: string) => Promise<void>;
-  toggle: (url: string, title: string) => Promise<void>;
+  toggle: (url: string, title: string, faviconUrl?: string | null) => Promise<void>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -29,7 +29,7 @@ export const useBookmarksStore = create<BookmarksState>((set, get) => ({
     set({ currentBookmark: bookmark });
   },
 
-  toggle: async (url, title) => {
+  toggle: async (url, title, faviconUrl = null) => {
     const existing = get().currentBookmark;
     if (existing && existing.url === url) {
       await invoke("remove_bookmark", { id: existing.id });
@@ -38,7 +38,7 @@ export const useBookmarksStore = create<BookmarksState>((set, get) => ({
       const created = await invoke<Bookmark>("add_bookmark", {
         url,
         title,
-        faviconUrl: null,
+        faviconUrl,
       });
       set({ currentBookmark: created });
     }

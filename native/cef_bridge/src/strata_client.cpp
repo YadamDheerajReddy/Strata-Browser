@@ -309,6 +309,24 @@ void StrataClient::OnFaviconURLChange(
   }
 }
 
+bool StrataClient::OnProcessMessageReceived(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefFrame> frame,
+    CefProcessId source_process,
+    CefRefPtr<CefProcessMessage> message) {
+  CEF_REQUIRE_UI_THREAD();
+  if (message->GetName() != "scroll-offset-changed") {
+    return false;
+  }
+  const int id = FindId(browser);
+  if (id >= 0) {
+    CefRefPtr<CefListValue> args = message->GetArgumentList();
+    browsers_[id].scroll_x = args->GetDouble(0);
+    browsers_[id].scroll_y = args->GetDouble(1);
+  }
+  return true;
+}
+
 void StrataClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                               CefRefPtr<CefFrame> frame,
                               int httpStatusCode) {
@@ -379,6 +397,8 @@ bool StrataClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
     const char* action = nullptr;
     if (shift_down && event.windows_key_code == 'N') {
       action = "new_private_tab";
+    } else if (shift_down && event.windows_key_code == 'R') {
+      action = "open_continuum";
     } else if (!shift_down) {
       switch (event.windows_key_code) {
         case 'T':
@@ -538,6 +558,16 @@ bool StrataClient::GetFaviconUrl(int browser_id, std::string* out_url) {
     return false;
   }
   *out_url = it->second.favicon_url;
+  return true;
+}
+
+bool StrataClient::GetScrollOffset(int browser_id, double* out_x, double* out_y) {
+  auto it = browsers_.find(browser_id);
+  if (it == browsers_.end()) {
+    return false;
+  }
+  *out_x = it->second.scroll_x;
+  *out_y = it->second.scroll_y;
   return true;
 }
 

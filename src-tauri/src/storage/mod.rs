@@ -179,6 +179,7 @@ impl Storage {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM navigation_events WHERE profile_id = ?1", params![id])?;
+        tx.execute("DELETE FROM page_states WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM bookmarks WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM downloads WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM settings WHERE profile_id = ?1", params![id])?;
@@ -307,6 +308,52 @@ impl Storage {
         conn.execute(
             "DELETE FROM navigation_events WHERE profile_id = ?1",
             params![profile_id],
+        )?;
+        Ok(())
+    }
+
+    /// EventRecorder's TAB_CREATED event (TRD §4, ContinuumManager). Carries
+    /// no url/title of its own — a tab's first real NAVIGATION event covers
+    /// that — but its presence in the append-only log is what lets a later
+    /// phase's RestoreManager tell "this tab existed but never navigated"
+    /// apart from "this tab never existed."
+    pub fn add_tab_created_event(&self, profile_id: &str, tab_id: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO navigation_events (profile_id, tab_id, type, timestamp)
+             VALUES (?1, ?2, 'TAB_CREATED', ?3)",
+            params![profile_id, tab_id, now_unix()],
+        )?;
+        Ok(())
+    }
+
+    // --- Continuum: StateCollector checkpoints (page_states) ---
+
+    /// A periodic PageState checkpoint (Backend Schema §4) — browser-owned
+    /// fields only for now (scroll position, a running navigation_index);
+    /// zoom is a fixed 1.0 and the best-effort page-owned columns stay NULL
+    /// until a later phase captures them. Nothing reads this table yet —
+    /// Phase 4's MomentManager is what consumes it — but writing it now is
+    /// what the Implementation Plan's Phase 3/4 dependency note calls for:
+    /// Moments can't be built against a state table that doesn't exist yet.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_page_state_checkpoint(
+        &self,
+        profile_id: &str,
+        tab_id: &str,
+        url: &str,
+        title: &str,
+        favicon_url: Option<&str>,
+        scroll_x: f64,
+        scroll_y: f64,
+        navigation_index: i64,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO page_states
+                (profile_id, tab_id, url, title, favicon_url, scroll_x, scroll_y, navigation_index, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![profile_id, tab_id, url, title, favicon_url, scroll_x, scroll_y, navigation_index, now_unix()],
         )?;
         Ok(())
     }

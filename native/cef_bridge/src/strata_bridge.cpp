@@ -331,6 +331,10 @@ int strata_cef_get_tab_state(unsigned long long browser_id,
     out_state->can_go_back = browser->CanGoBack() ? 1 : 0;
     out_state->can_go_forward = browser->CanGoForward() ? 1 : 0;
     out_state->is_loading = browser->IsLoading() ? 1 : 0;
+    double scroll_x = 0.0, scroll_y = 0.0;
+    g_client->GetScrollOffset(static_cast<int>(browser_id), &scroll_x, &scroll_y);
+    out_state->scroll_x = scroll_x;
+    out_state->scroll_y = scroll_y;
   }
 
   CopyToBuffer(browser->GetMainFrame()->GetURL().ToString(), url_buf,

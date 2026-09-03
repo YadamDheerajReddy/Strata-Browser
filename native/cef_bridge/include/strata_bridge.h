@@ -171,6 +171,11 @@ typedef struct {
   int can_go_back;
   int can_go_forward;
   int is_loading;
+  // Current scroll offset in CSS pixels, per Continuum's StateCollector
+  // (see strata_client.h's OnScrollOffsetChanged) — (0, 0) until the page
+  // has scrolled at least once.
+  double scroll_x;
+  double scroll_y;
 } strata_tab_state_t;
 
 // Returns 1 and fills out_state/url_buf/title_buf/favicon_buf if

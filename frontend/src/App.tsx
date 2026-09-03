@@ -11,6 +11,7 @@ import { BookmarksBar } from "./components/BookmarksBar";
 import { Logo } from "./components/Logo";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
+import { ContinuumPanel } from "./components/ContinuumPanel";
 import { useTabsStore } from "./stores/tabsStore";
 import { useBookmarksStore } from "./stores/bookmarksStore";
 
@@ -29,7 +30,8 @@ type Action =
   | "bookmark"
   | "history"
   | "downloads"
-  | "next_tab";
+  | "next_tab"
+  | "open_continuum";
 
 export default function App() {
   const tabs = useTabsStore((s) => s.tabs);
@@ -94,7 +96,8 @@ export default function App() {
         }
         break;
       case "bookmark":
-        if (activeTab?.kind === "web") void toggleBookmark(activeTab.url, activeTab.title);
+        if (activeTab?.kind === "web")
+          void toggleBookmark(activeTab.url, activeTab.title, activeTab.faviconUrl);
         break;
       case "history":
         void openInternalTab("history");
@@ -109,6 +112,9 @@ export default function App() {
         void setActiveTab(next.id);
         break;
       }
+      case "open_continuum":
+        window.dispatchEvent(new CustomEvent("strata:toggle-continuum"));
+        break;
     }
   };
 
@@ -120,9 +126,11 @@ export default function App() {
       const action: Action | null =
         e.shiftKey && key === "n"
           ? "new_private_tab"
-          : e.shiftKey
-            ? null
-            : key === "t"
+          : e.shiftKey && key === "r"
+            ? "open_continuum"
+            : e.shiftKey
+              ? null
+              : key === "t"
               ? "new_tab"
               : key === "w"
                 ? "close_tab"
@@ -188,6 +196,7 @@ export default function App() {
   return (
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[color:var(--color-bg)]">
       <PermissionPrompt />
+      <ContinuumPanel />
 
       <div
         data-tauri-drag-region

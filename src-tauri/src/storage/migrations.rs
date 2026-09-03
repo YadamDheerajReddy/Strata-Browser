@@ -88,6 +88,38 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
             ON navigation_events(profile_id, timestamp DESC);
     "#,
     rollback_note: "DROP TABLE navigation_events, settings, downloads, bookmarks, profiles (in that order, for FK safety).",
+}, Migration {
+    version: 2,
+    sql: r#"
+        -- page_states: StateCollector's periodic checkpoints (Backend
+        -- Schema §4, TRD §4's snapshot strategy). Same pragmatic deviation
+        -- as navigation_events above: profile_id/tab_id are plain columns
+        -- rather than routed through tabs/windows tables that don't exist
+        -- yet. selected_text/focused_element/serialized_form_state are
+        -- carried as nullable columns per the documented schema but not
+        -- populated until a later phase actually captures page-owned
+        -- state; zoom is a fixed 1.0 until a zoom feature exists to report
+        -- a real value.
+        CREATE TABLE page_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT NOT NULL REFERENCES profiles(id),
+            tab_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT,
+            favicon_url TEXT,
+            scroll_x REAL NOT NULL DEFAULT 0,
+            scroll_y REAL NOT NULL DEFAULT 0,
+            zoom REAL NOT NULL DEFAULT 1.0,
+            navigation_index INTEGER NOT NULL DEFAULT 0,
+            selected_text TEXT,
+            focused_element TEXT,
+            serialized_form_state TEXT,
+            is_checkpoint INTEGER NOT NULL DEFAULT 1,
+            timestamp INTEGER NOT NULL
+        );
+        CREATE INDEX idx_page_states_tab_time ON page_states(tab_id, timestamp DESC);
+    "#,
+    rollback_note: "DROP TABLE page_states.",
 }];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {

@@ -6,6 +6,7 @@ import {
   Download,
   History,
   Lock,
+  RotateCcw,
   RotateCw,
   Search,
   ShieldCheck,
@@ -16,9 +17,9 @@ import { useTabsStore } from "../stores/tabsStore";
 import { useBookmarksStore } from "../stores/bookmarksStore";
 
 // Back/forward/reload + the address bar — UI/UX Brief §4: "one field, no
-// separate search box." The Rewind (Continuum) control that sits at the far
-// right in the brief's mockup is intentionally left out until Phase 3;
-// there is nothing for it to open yet.
+// separate search box." The ↶ Rewind button (UI/UX Brief §5) opens
+// ContinuumPanel — a right-anchored timeline, not a tab — so it's rendered
+// here rather than routed through tabsStore like History/Downloads.
 export function NavBar() {
   const tabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
@@ -162,7 +163,7 @@ export function NavBar() {
             aria-label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
             disabled={!activeTab?.url}
             onClick={() => {
-              if (activeTab?.url) void toggleBookmark(activeTab.url, activeTab.title);
+              if (activeTab?.url) void toggleBookmark(activeTab.url, activeTab.title, activeTab.faviconUrl);
             }}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[color:var(--color-text-secondary)] hover:text-[color:var(--color-text-primary)] disabled:opacity-30"
           >
@@ -175,6 +176,13 @@ export function NavBar() {
           </button>
         </div>
       )}
+
+      <NavButton
+        label="Open Continuum (Ctrl+Shift+R)"
+        onClick={() => window.dispatchEvent(new CustomEvent("strata:toggle-continuum"))}
+      >
+        <RotateCcw size={14} strokeWidth={1.75} />
+      </NavButton>
     </div>
   );
 }
