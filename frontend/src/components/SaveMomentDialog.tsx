@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { invoke } from "@tauri-apps/api/core";
 import { useTabsStore } from "../stores/tabsStore";
 import { saveCurrentMoment } from "../lib/moments";
 
@@ -32,6 +33,15 @@ export function SaveMomentDialog() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  // The CEF browser behind whatever tab was active is a native child
+  // window that always paints on top of this webview's own content —
+  // without this, the dialog renders clipped to the chrome strip and the
+  // page shows through it (same issue ContinuumPanel had — see
+  // set_modal_open in lib.rs).
+  useEffect(() => {
+    void invoke("set_modal_open", { open });
   }, [open]);
 
   const handleSave = async () => {

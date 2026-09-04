@@ -45,16 +45,29 @@ struct WindowState {
     // set_continuum_open. Unlike panel_open, the active browser stays
     // visible; it's just narrowed to leave room on the right.
     continuum_open: Mutex<bool>,
+    // True while a centered, page-blocking React modal (SaveMomentDialog,
+    // CommandPalette) is open — see set_modal_open. Like panel_open this
+    // hides the active browser entirely rather than just narrowing it
+    // (unlike Continuum's sidebar, a modal is meant to block the page, not
+    // coexist alongside it), but unlike panel_open it isn't tied to which
+    // *kind* of tab is active — it's a temporary overlay on top of
+    // whatever tab was already showing.
+    modal_open: Mutex<bool>,
 }
 
 /// (webview should cover the whole window, the active browser should leave
-/// room for the Continuum sidebar) — the two booleans everything touching
-/// window layout needs, derived from panel_open/continuum_open in one
-/// place so they can't drift out of sync across call sites.
-fn effective_layout(ws: &WindowState) -> (bool, bool) {
+/// room for the Continuum sidebar, the active browser should be hidden
+/// entirely) — everything touching window layout needs these, derived from
+/// panel_open/continuum_open/modal_open in one place so they can't drift
+/// out of sync across call sites.
+fn effective_layout(ws: &WindowState) -> (bool, bool, bool) {
     let panel_open = *ws.panel_open.lock().unwrap();
     let continuum_open = *ws.continuum_open.lock().unwrap();
-    (panel_open || continuum_open, !panel_open && continuum_open)
+    let modal_open = *ws.modal_open.lock().unwrap();
+    let browser_hidden = panel_open || modal_open;
+    let webview_full = browser_hidden || continuum_open;
+    let sidebar_reserved = !browser_hidden && continuum_open;
+    (webview_full, sidebar_reserved, browser_hidden)
 }
 
 #[derive(Default)]
@@ -294,7 +307,7 @@ fn activate_tab(
     browser_id: u64,
 ) {
     let ws = state.for_window(window.label());
-    let (_, sidebar_reserved) = effective_layout(&ws);
+    let (_, sidebar_reserved, browser_hidden) = effective_layout(&ws);
     let (x, y, w, h) = browser_content_bounds(&window, sidebar_reserved);
     let previous = ws.active_browser.lock().unwrap().replace(browser_id);
 
@@ -305,7 +318,10 @@ fn activate_tab(
             }
         }
         cef_bridge::resize_browser(browser_id, x, y, w, h);
-        cef_bridge::set_visible(browser_id, true);
+        // A modal/panel may already be covering the window (e.g. the
+        // command palette opened while switching tabs) — don't reveal the
+        // newly-activated browser out from under it.
+        cef_bridge::set_visible(browser_id, !browser_hidden);
     });
 }
 
@@ -357,7 +373,7 @@ fn set_panel_open(
             run_cef(&app, move || cef_bridge::set_visible(id, false));
         }
     } else {
-        let (webview_full, sidebar_reserved) = effective_layout(&ws);
+        let (webview_full, sidebar_reserved, browser_hidden) = effective_layout(&ws);
         if webview_full {
             resize_webview_full(&window);
         } else {
@@ -367,7 +383,7 @@ fn set_panel_open(
         if let Some(id) = active {
             run_cef(&app, move || {
                 cef_bridge::resize_browser(id, x, y, w, h);
-                cef_bridge::set_visible(id, true);
+                cef_bridge::set_visible(id, !browser_hidden);
             });
         }
     }
@@ -389,7 +405,7 @@ fn set_continuum_open(
 ) {
     let ws = state.for_window(window.label());
     *ws.continuum_open.lock().unwrap() = open;
-    let (webview_full, sidebar_reserved) = effective_layout(&ws);
+    let (webview_full, sidebar_reserved, browser_hidden) = effective_layout(&ws);
 
     if webview_full {
         resize_webview_full(&window);
@@ -397,13 +413,48 @@ fn set_continuum_open(
         resize_chrome_webview(&window);
     }
 
-    if *ws.panel_open.lock().unwrap() {
+    if browser_hidden {
+        // A full panel or modal is already covering the window — no
+        // visible browser to make room for.
         return;
     }
     let active = *ws.active_browser.lock().unwrap();
     if let Some(id) = active {
         let (x, y, w, h) = browser_content_bounds(&window, sidebar_reserved);
         run_cef(&app, move || cef_bridge::resize_browser(id, x, y, w, h));
+    }
+}
+
+/// Opens/closes a centered, page-blocking React modal (SaveMomentDialog,
+/// CommandPalette) as a true full overlay — grows the chrome webview to
+/// the full window and hides the active browser entirely (unlike
+/// set_continuum_open's sidebar, a modal is meant to block interaction
+/// with the page, not coexist alongside it), respecting whatever
+/// panel/sidebar state was already in effect once it closes.
+#[tauri::command]
+fn set_modal_open(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<BrowserState>,
+    open: bool,
+) {
+    let ws = state.for_window(window.label());
+    *ws.modal_open.lock().unwrap() = open;
+    let (webview_full, sidebar_reserved, browser_hidden) = effective_layout(&ws);
+
+    if webview_full {
+        resize_webview_full(&window);
+    } else {
+        resize_chrome_webview(&window);
+    }
+
+    let active = *ws.active_browser.lock().unwrap();
+    if let Some(id) = active {
+        let (x, y, w, h) = browser_content_bounds(&window, sidebar_reserved);
+        run_cef(&app, move || {
+            cef_bridge::resize_browser(id, x, y, w, h);
+            cef_bridge::set_visible(id, !browser_hidden);
+        });
     }
 }
 
@@ -421,19 +472,17 @@ fn setup_window(app_handle: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         }
         let state = app_handle.state::<BrowserState>();
         let ws = state.for_window(&label);
-        if *ws.panel_open.lock().unwrap() {
-            // A React panel (History, Downloads, ...) is covering the
-            // window; CEF browsers are hidden and don't need resizing until
-            // set_panel_open(false) brings one back.
-            resize_webview_full(&resize_window);
-            return;
-        }
-
-        let (webview_full, sidebar_reserved) = effective_layout(&ws);
+        let (webview_full, sidebar_reserved, browser_hidden) = effective_layout(&ws);
         if webview_full {
             resize_webview_full(&resize_window);
         } else {
             resize_chrome_webview(&resize_window);
+        }
+
+        if browser_hidden {
+            // A React panel or modal is covering the window; CEF browsers
+            // are hidden and don't need resizing until it closes.
+            return;
         }
 
         let (x, y, w, h) = browser_content_bounds(&resize_window, sidebar_reserved);
@@ -723,6 +772,7 @@ pub fn run() {
             get_tab_state,
             set_panel_open,
             set_continuum_open,
+            set_modal_open,
             add_bookmark,
             remove_bookmark,
             list_bookmarks,

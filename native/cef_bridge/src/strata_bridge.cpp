@@ -186,6 +186,17 @@ unsigned long long strata_cef_create_browser(void* parent_hwnd,
   CefWindowInfo window_info;
   window_info.SetAsChild(static_cast<HWND>(parent_hwnd),
                           CefRect(x, y, width, height));
+  // SetAsChild() includes WS_VISIBLE by default, so without this every
+  // browser would be visible — on top, at its full rect — from the instant
+  // its native window is created, well before Rust/React ever get a chance
+  // to decide whether it should be (activate_tab's explicit set_visible
+  // call only runs after an async round-trip through Rust and back). That
+  // race let a background-created browser (e.g. RestoreManager creating
+  // several tabs back-to-back — Implementation Plan Phase 4) flash on top
+  // of whatever tab was actually active. Every real code path already
+  // calls strata_cef_set_visible(true) once a browser should actually be
+  // shown (see activate_tab in lib.rs), so starting hidden costs nothing.
+  window_info.style &= ~static_cast<DWORD>(WS_VISIBLE);
   // This whole app is built on Alloy-style assumptions — raw child-window
   // embedding, StrataClient's CefLifeSpanHandler/CefKeyboardHandler
   // callbacks (OnPreKeyEvent, OnBeforePopup, ...) instead of Chrome's own

@@ -429,6 +429,9 @@ bool StrataClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
         case VK_TAB:
           action = "next_tab";
           break;
+        case 'K':
+          action = "open_command_palette";
+          break;
         default:
           break;
       }

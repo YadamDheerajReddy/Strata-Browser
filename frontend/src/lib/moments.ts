@@ -65,13 +65,42 @@ export async function freezeTab(tabId: string): Promise<void> {
 // it's finished loading. Split layout/window geometry restoration is
 // explicitly Phase 5 (the schema's split_position exists but nothing
 // produces a split to restore yet).
+//
+// Deliberately does NOT use addTab() in a loop: addTab() always switches to
+// and reveals the tab it just created, which would flip away from the
+// homepage (unmounting whatever "Restoring Moment..." UI lives there) and
+// let the CEF browser it just revealed — a native window that always
+// paints on top of this webview's own content — show through mid-batch,
+// well before the whole Moment has finished restoring. Instead every tab
+// is created hidden via addTabsForRestore, and only the last one is
+// revealed, once RestoringMomentOverlay has fully finished its exit fade —
+// see the sequencing below.
 export async function restoreMoment(id: string): Promise<void> {
   const detail = await invoke<MomentDetail | null>("get_moment", { id });
-  if (!detail) return;
-  for (const tab of detail.tabs) {
-    const tabId = await useTabsStore.getState().addTab(tab.url);
-    void waitForLoadThenScroll(tabId, tab.scrollX, tab.scrollY);
-  }
+  if (!detail || detail.tabs.length === 0) return;
+
+  useMomentsStore.setState({
+    restoring: { name: detail.name, tabs: detail.tabs.map((t) => t.title || t.url) },
+  });
+
+  const tabIds = await useTabsStore.getState().addTabsForRestore(detail.tabs.map((t) => t.url));
+
+  // Keep "Restoring Moment..." on screen long enough to actually read (UI/
+  // UX Brief §8's "brief... then a natural transition"), then give its
+  // exit fade time to fully finish before revealing the restored tab.
+  await sleep(700);
+  useMomentsStore.setState({ restoring: null });
+  await sleep(200);
+
+  await useTabsStore.getState().setActiveTab(tabIds[tabIds.length - 1]);
+
+  tabIds.forEach((tabId, i) => {
+    void waitForLoadThenScroll(tabId, detail.tabs[i].scrollX, detail.tabs[i].scrollY);
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function waitForLoadThenScroll(tabId: string, x: number, y: number): Promise<void> {

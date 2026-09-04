@@ -13,29 +13,19 @@ import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { ContinuumPanel } from "./components/ContinuumPanel";
 import { SaveMomentDialog } from "./components/SaveMomentDialog";
+import { RestoringMomentOverlay } from "./components/RestoringMomentOverlay";
+import { CommandPalette } from "./components/CommandPalette";
 import { useTabsStore } from "./stores/tabsStore";
 import { useBookmarksStore } from "./stores/bookmarksStore";
 import { freezeTab } from "./lib/moments";
+import type { Action } from "./types/action";
 
-// The full set of chrome-level shortcut actions — shared between the DOM
-// keydown handler (fires when the chrome webview has focus) and the
-// "shortcut" Tauri event (fires when CEF forwards one from a page that has
-// keyboard focus; see strata_client.cpp's OnPreKeyEvent and
-// cef_bridge.rs's set_shortcut_forwarding). Both paths land here so there
-// is exactly one place that knows what each shortcut does.
-type Action =
-  | "new_tab"
-  | "new_private_tab"
-  | "close_tab"
-  | "focus_address_bar"
-  | "reload"
-  | "bookmark"
-  | "history"
-  | "downloads"
-  | "next_tab"
-  | "open_continuum"
-  | "save_moment"
-  | "freeze_moment";
+// handleAction below is where every one of Action's variants is handled —
+// shared between the DOM keydown handler (fires when the chrome webview
+// has focus), the "shortcut" Tauri event (CEF forwarding one from a page
+// that has keyboard focus; see strata_client.cpp's OnPreKeyEvent and
+// cef_bridge.rs's set_shortcut_forwarding), and CommandPalette's
+// "strata:action" event.
 
 export default function App() {
   const tabs = useTabsStore((s) => s.tabs);
@@ -125,6 +115,9 @@ export default function App() {
       case "freeze_moment":
         if (activeTab) void freezeTab(activeTab.id);
         break;
+      case "open_command_palette":
+        window.dispatchEvent(new CustomEvent("strata:open-command-palette"));
+        break;
     }
   };
 
@@ -160,7 +153,9 @@ export default function App() {
                           ? "downloads"
                           : key === "tab"
                             ? "next_tab"
-                            : null;
+                            : key === "k"
+                              ? "open_command_palette"
+                              : null;
       if (action) {
         e.preventDefault();
         handleAction(action);
@@ -180,6 +175,17 @@ export default function App() {
     return () => {
       void unlisten.then((f) => f());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // CommandPalette selections land here rather than calling handleAction
+  // directly — it has no access to this closure, and dispatching an event
+  // (same pattern as every other cross-component trigger in this file:
+  // focus-address-bar, toggle-continuum, save-moment) keeps it decoupled.
+  useEffect(() => {
+    const onAction = (e: Event) => handleAction((e as CustomEvent<Action>).detail);
+    window.addEventListener("strata:action", onAction);
+    return () => window.removeEventListener("strata:action", onAction);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -212,6 +218,8 @@ export default function App() {
       <PermissionPrompt />
       <ContinuumPanel />
       <SaveMomentDialog />
+      <RestoringMomentOverlay />
+      <CommandPalette />
 
       <div
         data-tauri-drag-region

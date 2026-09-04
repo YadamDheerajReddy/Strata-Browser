@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowRight, Globe, Pencil, Search, X } from "lucide-react";
 import type { HistoryEntry } from "../types/bookmark";
@@ -57,7 +57,6 @@ export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boole
   const [focused, setFocused] = useState(false);
   const [glow, setGlow] = useState({ x: 50, y: 50 });
   const [glowVisible, setGlowVisible] = useState(false);
-  const [restoring, setRestoring] = useState<{ name: string; tabs: string[] } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -72,12 +71,6 @@ export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boole
     }
     inputRef.current?.focus();
   }, [isPrivate, refreshMoments]);
-
-  const handleRestore = async (moment: Moment) => {
-    setRestoring({ name: moment.name, tabs: moment.tabs.map((t) => t.title || t.url) });
-    await restoreMoment(moment.id);
-    setTimeout(() => setRestoring(null), 600);
-  };
 
   const startRename = (moment: Moment) => {
     setRenamingId(moment.id);
@@ -276,7 +269,7 @@ export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boole
                 >
                   <button
                     type="button"
-                    onClick={() => void handleRestore(moment)}
+                    onClick={() => void restoreMoment(moment.id)}
                     className="flex flex-col gap-2.5 text-left"
                   >
                     <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[color:var(--color-surface-2)]">
@@ -339,41 +332,6 @@ export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boole
           </motion.div>
         )}
       </div>
-
-      {/* Moment restoration transition (UI/UX Brief §8: "brief 'Restoring
-          Moment…' list of tab names, then a natural transition into the
-          restored workspace — never an abrupt cut"). */}
-      <AnimatePresence>
-        {restoring && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-[color:var(--color-bg)]/80 backdrop-blur-sm"
-          >
-            <div className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-6 py-5 text-center shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5)]">
-              <p className="mb-3 text-sm text-[color:var(--color-text-secondary)]">
-                Restoring <span className="text-[color:var(--color-text-primary)]">{restoring.name}</span>…
-              </p>
-              <ul className="space-y-1">
-                {restoring.tabs.map((title, i) => (
-                  <motion.li
-                    key={i}
-                    initial={{ opacity: 0, x: -6 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.08 }}
-                    className="text-xs text-[color:var(--color-text-secondary)]"
-                  >
-                    <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-accent-2)]" />
-                    {title}
-                  </motion.li>
-                ))}
-              </ul>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

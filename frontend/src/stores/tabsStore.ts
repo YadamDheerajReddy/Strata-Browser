@@ -73,6 +73,12 @@ interface TabsState {
   activeTabId: string | null;
 
   addTab: (url?: string, isPrivate?: boolean) => Promise<string>;
+  // Restore Moment only (lib/moments.ts) — creates every tab in the batch
+  // hidden, without switching to any of them in turn the way addTab()
+  // always does. Returns the created tab ids in the same order as `urls`;
+  // the caller decides when (and which one) to actually reveal via
+  // setActiveTab, once its own "Restoring Moment..." transition is done.
+  addTabsForRestore: (urls: string[]) => Promise<string[]>;
   openInternalTab: (kind: "history" | "downloads") => Promise<string>;
   navigateFromHome: (id: string, url: string) => Promise<void>;
   // quitIfEmpty lets internal callers (ProfileSwitcher's tab reset) close
@@ -128,6 +134,21 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     await syncBackendForActiveTab(tab);
     if (!isPrivate) void invoke("record_tab_created", { tabId: tab.id });
     return tab.id;
+  },
+
+  addTabsForRestore: async (urls) => {
+    // Every browser starts hidden natively now (see strata_bridge.cpp's
+    // strata_cef_create_browser) — nothing further needed here to keep
+    // this batch invisible until the whole Moment has finished restoring.
+    const ids: string[] = [];
+    for (const url of urls) {
+      const browserId = await invoke<number>("create_tab", { url, isPrivate: false });
+      const tab = makeTab(browserId, url, false);
+      set((state) => ({ tabs: [...state.tabs, tab] }));
+      void invoke("record_tab_created", { tabId: tab.id });
+      ids.push(tab.id);
+    }
+    return ids;
   },
 
   // History/Downloads always open as a fresh tab (App Flow doc: "a new

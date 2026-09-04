@@ -29,6 +29,12 @@ export interface MomentDetail {
 
 interface MomentsState {
   moments: Moment[];
+  // Set/cleared by lib/moments.ts's restoreMoment — read by
+  // RestoringMomentOverlay, rendered once at the App root rather than
+  // inside HomePage so it survives the tab switch that happens partway
+  // through a restore (see restoreMoment's own comments for why the
+  // sequencing there matters).
+  restoring: { name: string; tabs: string[] } | null;
   refresh: () => Promise<void>;
   remove: (id: string) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
@@ -40,6 +46,7 @@ interface MomentsState {
 // store has no business knowing about.
 export const useMomentsStore = create<MomentsState>((set, get) => ({
   moments: [],
+  restoring: null,
 
   refresh: async () => {
     const moments = await invoke<Moment[]>("list_moments");
