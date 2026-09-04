@@ -109,6 +109,10 @@ pub struct MomentTabDetail {
 pub struct MomentDetail {
     pub id: String,
     pub name: String,
+    // Raw JSON — lib.rs's WindowBounds, serialized at save time and
+    // deserialized by the frontend (lib/moments.ts) at restore time.
+    // Storage doesn't need to understand its shape, only round-trip it.
+    pub window_layout: String,
     pub tabs: Vec<MomentTabDetail>,
 }
 
@@ -525,6 +529,7 @@ impl Storage {
         profile_id: &str,
         name: &str,
         source: &str,
+        window_layout: &str,
         tabs: &[MomentTabInput],
     ) -> rusqlite::Result<Moment> {
         let mut conn = self.conn.lock().unwrap();
@@ -534,9 +539,9 @@ impl Storage {
         let event_type = if source == "freeze" { "MOMENT_FROZEN" } else { "MOMENT_SAVED" };
 
         tx.execute(
-            "INSERT INTO moments (id, profile_id, name, source, tab_count, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            params![moment_id, profile_id, name, source, tabs.len() as i64, now],
+            "INSERT INTO moments (id, profile_id, name, source, window_layout, tab_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            params![moment_id, profile_id, name, source, window_layout, tabs.len() as i64, now],
         )?;
 
         let mut summaries = Vec::with_capacity(tabs.len());
@@ -630,10 +635,14 @@ impl Storage {
     /// back with a sane 0,0 default instead of failing the whole restore.
     pub fn get_moment(&self, id: &str) -> rusqlite::Result<Option<MomentDetail>> {
         let conn = self.conn.lock().unwrap();
-        let name: Option<String> = conn
-            .query_row("SELECT name FROM moments WHERE id = ?1", params![id], |row| row.get(0))
+        let header: Option<(String, String)> = conn
+            .query_row(
+                "SELECT name, window_layout FROM moments WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .optional()?;
-        let Some(name) = name else { return Ok(None) };
+        let Some((name, window_layout)) = header else { return Ok(None) };
 
         let mut stmt = conn.prepare(
             "SELECT mt.url, mt.title, mt.favicon_url, COALESCE(ps.scroll_x, 0), COALESCE(ps.scroll_y, 0)
@@ -652,7 +661,7 @@ impl Storage {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        Ok(Some(MomentDetail { id: id.to_string(), name, tabs }))
+        Ok(Some(MomentDetail { id: id.to_string(), name, window_layout, tabs }))
     }
 
     /// Cascades to moment_tabs/moment_events; the page_states rows those

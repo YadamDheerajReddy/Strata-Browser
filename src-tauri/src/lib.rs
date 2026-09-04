@@ -319,10 +319,47 @@ fn activate_tab(
         }
         cef_bridge::resize_browser(browser_id, x, y, w, h);
         // A modal/panel may already be covering the window (e.g. the
-        // command palette opened while switching tabs) — don't reveal the
-        // newly-activated browser out from under it.
+        // command palette opened while switching tabs) — don't reveal
+        // the newly-activated browser out from under it.
         cef_bridge::set_visible(browser_id, !browser_hidden);
     });
+}
+
+/// The main window's geometry, captured into a Moment's window_layout
+/// column (Backend Schema §4) at save/freeze time and reapplied by
+/// set_window_bounds on restore — Implementation Plan Phase 5's "window
+/// dimensions restored together."
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    is_maximized: bool,
+}
+
+#[tauri::command]
+fn get_window_bounds(window: tauri::WebviewWindow) -> WindowBounds {
+    let pos = window.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
+    let size = window.outer_size().unwrap_or(PhysicalSize::new(1280, 840));
+    WindowBounds {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+        is_maximized: window.is_maximized().unwrap_or(false),
+    }
+}
+
+#[tauri::command]
+fn set_window_bounds(window: tauri::WebviewWindow, bounds: WindowBounds) {
+    if bounds.is_maximized {
+        let _ = window.maximize();
+        return;
+    }
+    let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+    let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
 }
 
 #[tauri::command]
@@ -616,7 +653,12 @@ fn hostname_from_url(url: &str) -> String {
 /// non-private "web" tabs — see lib/moments.ts's saveCurrentMoment) becomes
 /// one workspace snapshot.
 #[tauri::command]
-fn save_moment(data: tauri::State<AppData>, name: String, tabs: Vec<MomentTabInput>) -> Result<Moment, String> {
+fn save_moment(
+    data: tauri::State<AppData>,
+    name: String,
+    window_layout: String,
+    tabs: Vec<MomentTabInput>,
+) -> Result<Moment, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Moment name can't be empty".to_string());
@@ -625,14 +667,16 @@ fn save_moment(data: tauri::State<AppData>, name: String, tabs: Vec<MomentTabInp
         return Err("Nothing to save".to_string());
     }
     data.storage
-        .save_moment(&data.profile_id(), name, "explicit_save", &tabs)
+        .save_moment(&data.profile_id(), name, "explicit_save", &window_layout, &tabs)
         .map_err(|e| e.to_string())
 }
 
 /// Freeze: a single tab, auto-named from its title (falling back to its
 /// hostname for a tab with no title yet) — App Flow doc §5. The frontend is
 /// responsible for closing the tab afterward, same "Rust records, React
-/// acts" split as everywhere else Continuum touches tab lifecycle.
+/// acts" split as everywhere else Continuum touches tab lifecycle. Carries
+/// no window_layout of its own — a single frozen tab has no window
+/// geometry worth restoring, unlike a full Save Moment.
 #[tauri::command]
 fn freeze_tab(data: tauri::State<AppData>, tab: MomentTabInput) -> Result<Moment, String> {
     let name = if tab.title.trim().is_empty() {
@@ -641,7 +685,7 @@ fn freeze_tab(data: tauri::State<AppData>, tab: MomentTabInput) -> Result<Moment
         tab.title.clone()
     };
     data.storage
-        .save_moment(&data.profile_id(), &name, "freeze", std::slice::from_ref(&tab))
+        .save_moment(&data.profile_id(), &name, "freeze", "{}", std::slice::from_ref(&tab))
         .map_err(|e| e.to_string())
 }
 
@@ -770,6 +814,8 @@ pub fn run() {
             go_forward,
             reload_tab,
             get_tab_state,
+            get_window_bounds,
+            set_window_bounds,
             set_panel_open,
             set_continuum_open,
             set_modal_open,

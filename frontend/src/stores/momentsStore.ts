@@ -24,6 +24,8 @@ export interface MomentTabDetail extends MomentTabSummary {
 export interface MomentDetail {
   id: string;
   name: string;
+  // Raw JSON (lib.rs's WindowBounds) — parsed by restoreMoment, not here.
+  windowLayout: string;
   tabs: MomentTabDetail[];
 }
 

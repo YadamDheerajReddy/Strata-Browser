@@ -13,6 +13,14 @@ interface TabSnapshot {
   scrollY: number;
 }
 
+interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  isMaximized: boolean;
+}
+
 // Reads a tab's *current* scroll position directly rather than trusting
 // whatever tabsStore's throttled StateCollector checkpoint last wrote — the
 // TRD is explicit that an explicit Save/Freeze bypasses that debounce
@@ -34,7 +42,9 @@ async function snapshotTab(tab: Tab): Promise<TabSnapshot | null> {
 
 // Save Current Moment (Ctrl+Shift+M / Continuum panel's button / command
 // palette) — every open, non-private tab across the window becomes one
-// named workspace snapshot (App Flow doc §6).
+// named workspace snapshot (App Flow doc §6), plus the window's current
+// geometry (Implementation Plan Phase 5's "window dimensions restored
+// together").
 export async function saveCurrentMoment(name: string): Promise<void> {
   const tabs = useTabsStore.getState().tabs;
   const snapshots = (await Promise.all(tabs.map(snapshotTab))).filter(
@@ -43,13 +53,15 @@ export async function saveCurrentMoment(name: string): Promise<void> {
   if (snapshots.length === 0) {
     throw new Error("No open pages to save");
   }
-  await invoke("save_moment", { name, tabs: snapshots });
+  const bounds = await invoke<WindowBounds>("get_window_bounds");
+  await invoke("save_moment", { name, windowLayout: JSON.stringify(bounds), tabs: snapshots });
   await useMomentsStore.getState().refresh();
 }
 
 // Freeze Moment (tab right-click / Ctrl+Shift+F) — one tab, auto-named,
 // closed immediately after capture (App Flow doc §5: "I don't need this
-// open right now, but I'm not done with it").
+// open right now, but I'm not done with it"). No window geometry of its
+// own to capture — freeze_tab's Rust side always stores "{}".
 export async function freezeTab(tabId: string): Promise<void> {
   const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
   if (!tab) return;
@@ -61,10 +73,10 @@ export async function freezeTab(tabId: string): Promise<void> {
 }
 
 // Restore Moment (App Flow doc §8) — reopens every captured tab in
-// original order, then reapplies each one's captured scroll position once
-// it's finished loading. Split layout/window geometry restoration is
-// explicitly Phase 5 (the schema's split_position exists but nothing
-// produces a split to restore yet).
+// original order, reapplies the saved window geometry (Implementation
+// Plan Phase 5's "window dimensions restored together"), then reapplies
+// each tab's captured scroll position once it's finished loading. Split
+// layout restoration was dropped along with Split View itself.
 //
 // Deliberately does NOT use addTab() in a loop: addTab() always switches to
 // and reveals the tab it just created, which would flip away from the
@@ -91,6 +103,19 @@ export async function restoreMoment(id: string): Promise<void> {
   await sleep(700);
   useMomentsStore.setState({ restoring: null });
   await sleep(200);
+
+  // Window dimensions restored together — applied right before reveal so
+  // the workspace appears already in its saved geometry rather than
+  // visibly resizing into place.
+  try {
+    const bounds = JSON.parse(detail.windowLayout) as Partial<WindowBounds>;
+    if (typeof bounds.width === "number" && typeof bounds.height === "number") {
+      await invoke("set_window_bounds", { bounds });
+    }
+  } catch {
+    // Frozen tabs (and any Moment saved before Phase 5) carry "{}" here —
+    // nothing to restore, not an error.
+  }
 
   await useTabsStore.getState().setActiveTab(tabIds[tabIds.length - 1]);
 
