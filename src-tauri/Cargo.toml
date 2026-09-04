@@ -1,6 +1,6 @@
 [package]
 name = "strata"
-version = "0.1.0"
+version = "0.0.1"
 description = "Strata — a privacy-first, local-first desktop browser"
 authors = ["Strata"]
 edition = "2021"
