@@ -27,13 +27,46 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Strata",
+    "copyright": "Copyright © 2026 Strata",
+    "shortDescription": "A privacy-first, local-first desktop browser",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../native/cef_bridge/build/Release/chrome_100_percent.pak": "chrome_100_percent.pak",
+      "../native/cef_bridge/build/Release/chrome_200_percent.pak": "chrome_200_percent.pak",
+      "../native/cef_bridge/build/Release/chrome_elf.dll": "chrome_elf.dll",
+      "../native/cef_bridge/build/Release/d3dcompiler_47.dll": "d3dcompiler_47.dll",
+      "../native/cef_bridge/build/Release/dxcompiler.dll": "dxcompiler.dll",
+      "../native/cef_bridge/build/Release/dxil.dll": "dxil.dll",
+      "../native/cef_bridge/build/Release/icudtl.dat": "icudtl.dat",
+      "../native/cef_bridge/build/Release/libEGL.dll": "libEGL.dll",
+      "../native/cef_bridge/build/Release/libGLESv2.dll": "libGLESv2.dll",
+      "../native/cef_bridge/build/Release/libcef.dll": "libcef.dll",
+      "../native/cef_bridge/build/Release/resources.pak": "resources.pak",
+      "../native/cef_bridge/build/Release/strata_cef_bridge.dll": "strata_cef_bridge.dll",
+      "../native/cef_bridge/build/Release/v8_context_snapshot.bin": "v8_context_snapshot.bin",
+      "../native/cef_bridge/build/Release/vk_swiftshader.dll": "vk_swiftshader.dll",
+      "../native/cef_bridge/build/Release/vk_swiftshader_icd.json": "vk_swiftshader_icd.json",
+      "../native/cef_bridge/build/Release/vulkan-1.dll": "vulkan-1.dll",
+      "../native/cef_bridge/build/Release/locales": "locales"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }
