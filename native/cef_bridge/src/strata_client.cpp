@@ -73,6 +73,8 @@ void (*StrataClient::permission_callback_)(unsigned long long request_id,
                                             const char* kind) = nullptr;
 void (*StrataClient::crash_callback_)(unsigned long long browser_id,
                                        const char* reason) = nullptr;
+void (*StrataClient::fullscreen_callback_)(unsigned long long browser_id,
+                                            int fullscreen) = nullptr;
 std::map<unsigned long long, StrataClient::PendingPermission>
     StrataClient::pending_permissions_;
 // Started well above where CEF's own OnShowPermissionPrompt prompt_id
@@ -317,6 +319,24 @@ void StrataClient::SetCrashCallback(void (*callback)(unsigned long long browser_
   crash_callback_ = callback;
 }
 
+void StrataClient::OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
+                                           bool fullscreen) {
+  CEF_REQUIRE_UI_THREAD();
+  const int id = FindId(browser);
+  if (id < 0) {
+    return;
+  }
+  browsers_[id].is_fullscreen = fullscreen;
+  if (fullscreen_callback_) {
+    fullscreen_callback_(static_cast<unsigned long long>(id), fullscreen ? 1 : 0);
+  }
+}
+
+void StrataClient::SetFullscreenCallback(
+    void (*callback)(unsigned long long browser_id, int fullscreen)) {
+  fullscreen_callback_ = callback;
+}
+
 void StrataClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                   const CefString& title) {
   CEF_REQUIRE_UI_THREAD();
@@ -397,6 +417,23 @@ bool StrataClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
   const bool ctrl_down = (event.modifiers & EVENTFLAG_CONTROL_DOWN) != 0;
   const bool alt_down = (event.modifiers & EVENTFLAG_ALT_DOWN) != 0;
   const bool shift_down = (event.modifiers & EVENTFLAG_SHIFT_DOWN) != 0;
+
+  // Escape while a page is in HTML5 fullscreen (YouTube/Netflix's own
+  // fullscreen button, etc.) — real browsers trap this at the chrome level
+  // rather than leaving it to the page, since plenty of pages never wire up
+  // their own Escape handler. ExitFullscreen() drives it from the browser
+  // side so the page's own fullscreenchange listener still fires correctly
+  // (unlike just resizing our window back without telling CEF/the DOM).
+  if (event.windows_key_code == VK_ESCAPE) {
+    const int id = FindId(browser);
+    if (id >= 0) {
+      auto it = browsers_.find(id);
+      if (it != browsers_.end() && it->second.is_fullscreen) {
+        browser->GetHost()->ExitFullscreen(true);
+        return true;
+      }
+    }
+  }
 
   // Browser-level shortcuts CEF can just act on directly.
   switch (event.windows_key_code) {

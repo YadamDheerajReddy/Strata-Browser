@@ -53,6 +53,13 @@ struct WindowState {
     // *kind* of tab is active — it's a temporary overlay on top of
     // whatever tab was already showing.
     modal_open: Mutex<bool>,
+    // True while the active browser's page is in HTML5 fullscreen (see
+    // set_browser_fullscreen) — overrides the active browser's bounds to
+    // cover the entire window regardless of panel/continuum/modal state.
+    // The chrome webview is shrunk to nothing for the duration rather than
+    // relying on Z-order, so there's nothing left in that region to paint
+    // over the browser in the first place.
+    fullscreen: Mutex<bool>,
 }
 
 /// (webview should cover the whole window, the active browser should leave
@@ -215,6 +222,66 @@ fn browser_content_bounds(window: &tauri::WebviewWindow, sidebar_reserved: bool)
     let scale = window.scale_factor().unwrap_or(1.0);
     let sidebar_px = (SIDEBAR_WIDTH_LOGICAL * scale).round() as i32;
     (x, y, (w - sidebar_px).max(0), h)
+}
+
+/// Toggles the active browser between HTML5 fullscreen (covering the
+/// entire window, overriding whatever panel/continuum/modal layout was in
+/// effect) and its normal content-area bounds — see strata_client.cpp's
+/// OnFullscreenModeChange, which is what actually triggers this via the
+/// "browser-fullscreen" event. Escape while fullscreen is handled natively
+/// (OnPreKeyEvent calls CefBrowserHost::ExitFullscreen(), which fires this
+/// same event on the way back out), so this only needs to react, not poll.
+#[tauri::command]
+fn set_browser_fullscreen(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: tauri::State<BrowserState>,
+    browser_id: u64,
+    fullscreen: bool,
+) {
+    let ws = state.for_window(window.label());
+    // Ignore a stale event for a tab that isn't even the visible one
+    // (shouldn't happen — only the active tab's page can be interacted
+    // with to request fullscreen — but a background tab's bounds don't
+    // matter anyway since it's hidden).
+    if *ws.active_browser.lock().unwrap() != Some(browser_id) {
+        return;
+    }
+    *ws.fullscreen.lock().unwrap() = fullscreen;
+
+    // Actually take the OS window fullscreen (covering the taskbar too) —
+    // just resizing the browser inside the window's existing bounds still
+    // leaves the taskbar showing, since the window itself never grows past
+    // its normal monitor work-area otherwise. This is the same call a
+    // plain window titlebar's fullscreen/F11 button would make.
+    let _ = window.set_fullscreen(fullscreen);
+
+    let (x, y, w, h) = if fullscreen {
+        // Shrink the chrome webview to nothing — resizing the CEF browser
+        // to cover the tab/nav/bookmarks bars only works if there's no
+        // webview content still occupying that same screen region to begin
+        // with. Every other "who's on top" conflict in this app
+        // (panel_open/continuum_open/modal_open) resolves the same way:
+        // whichever side should be invisible gets its own bounds shrunk,
+        // never left to Z-order (a SetWindowPos-to-HWND_TOP on the browser
+        // was tried here first and had no visible effect at all).
+        let webview: &tauri::Webview<_> = window.as_ref();
+        let _ = webview.set_bounds(Rect {
+            position: PhysicalPosition::new(0, 0).into(),
+            size: PhysicalSize::new(0, 0).into(),
+        });
+        let size = window.inner_size().unwrap_or(PhysicalSize::new(1280, 840));
+        (0, 0, size.width as i32, size.height as i32)
+    } else {
+        let (webview_full, sidebar_reserved, _) = effective_layout(&ws);
+        if webview_full {
+            resize_webview_full(&window);
+        } else {
+            resize_chrome_webview(&window);
+        }
+        browser_content_bounds(&window, sidebar_reserved)
+    };
+    run_cef(&app, move || cef_bridge::resize_browser(browser_id, x, y, w, h));
 }
 
 /// Where a named profile's CEF data (cookies, cache, localStorage, ...)
@@ -522,7 +589,15 @@ fn setup_window(app_handle: &tauri::AppHandle, window: &tauri::WebviewWindow) {
             return;
         }
 
-        let (x, y, w, h) = browser_content_bounds(&resize_window, sidebar_reserved);
+        // A window resize (dragging an edge) while the active tab is in
+        // HTML5 fullscreen should keep covering the whole window, not snap
+        // back to the normal chrome-aware content bounds.
+        let (x, y, w, h) = if *ws.fullscreen.lock().unwrap() {
+            let size = resize_window.inner_size().unwrap_or(PhysicalSize::new(1280, 840));
+            (0, 0, size.width as i32, size.height as i32)
+        } else {
+            browser_content_bounds(&resize_window, sidebar_reserved)
+        };
         let ids: Vec<u64> = ws.known_browsers.lock().unwrap().iter().copied().collect();
         run_cef(&app_handle, move || {
             for id in ids {
@@ -832,6 +907,7 @@ pub fn run() {
             set_panel_open,
             set_continuum_open,
             set_modal_open,
+            set_browser_fullscreen,
             add_bookmark,
             remove_bookmark,
             list_bookmarks,
@@ -900,6 +976,11 @@ pub fn run() {
             // anything went wrong; the frontend shows a real recovery UI
             // instead once it hears "tab-crashed" (see tabsStore.ts).
             cef_bridge::set_crash_forwarding(app.handle().clone());
+
+            // A page entering/exiting HTML5 fullscreen (YouTube/Netflix's
+            // own fullscreen button, etc.) — the frontend calls
+            // set_browser_fullscreen below once it hears "browser-fullscreen".
+            cef_bridge::set_fullscreen_forwarding(app.handle().clone());
 
             // CEF gets no other opportunity to run browser-process work in
             // this configuration (see strata_bridge.h) — pump it at a

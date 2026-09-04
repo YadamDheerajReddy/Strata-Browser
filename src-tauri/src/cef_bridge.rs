@@ -44,6 +44,7 @@ extern "C" {
     );
     fn strata_cef_respond_permission(request_id: u64, allow: c_int);
     fn strata_cef_set_crash_callback(callback: extern "C" fn(u64, *const c_char));
+    fn strata_cef_set_fullscreen_callback(callback: extern "C" fn(u64, c_int));
     fn strata_cef_create_browser(
         parent_hwnd: *mut c_void,
         x: c_int,
@@ -328,6 +329,37 @@ extern "C" fn handle_crash_callback(browser_id: u64, reason: *const c_char) {
     };
     let event = CrashEvent { browser_id, reason: cstr_ptr_to_string(reason) };
     let _ = app.emit_to(label, "tab-crashed", event);
+}
+
+/// A page entering/exiting HTML5 fullscreen (Element.requestFullscreen(),
+/// a video site's own fullscreen button, etc.) — see strata_client.cpp's
+/// OnFullscreenModeChange.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullscreenEvent {
+    pub browser_id: u64,
+    pub fullscreen: bool,
+}
+
+/// Starts forwarding CEF fullscreen-change notifications as a window-scoped
+/// "browser-fullscreen" event. The frontend reacts by calling the
+/// set_browser_fullscreen command (lib.rs), which does the actual native
+/// browser resize — kept as a round trip through the frontend rather than
+/// resized directly from here so all window-layout mutation stays owned by
+/// lib.rs's WindowState, the same way set_panel_open/set_continuum_open/
+/// set_modal_open already work.
+pub fn set_fullscreen_forwarding(app: AppHandle<Wry>) {
+    let _ = APP_HANDLE.set(app);
+    unsafe { strata_cef_set_fullscreen_callback(handle_fullscreen_callback) };
+}
+
+extern "C" fn handle_fullscreen_callback(browser_id: u64, fullscreen: c_int) {
+    let Some(app) = APP_HANDLE.get() else { return };
+    let Some(label) = browser_windows().lock().unwrap().get(&browser_id).cloned() else {
+        return;
+    };
+    let event = FullscreenEvent { browser_id, fullscreen: fullscreen != 0 };
+    let _ = app.emit_to(label, "browser-fullscreen", event);
 }
 
 fn cstr_ptr_to_string(ptr: *const c_char) -> String {

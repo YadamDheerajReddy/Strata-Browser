@@ -89,6 +89,21 @@ class StrataClient : public CefClient,
                       const CefString& title) override;
   void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
                            const std::vector<CefString>& icon_urls) override;
+  // Fires when a page's own JS calls Element.requestFullscreen()/
+  // document.exitFullscreen() (YouTube/Netflix's fullscreen button, for
+  // example). CEF does not resize anything itself — per its own docs the
+  // client is responsible for that — so without this override the request
+  // succeeds inside the page's DOM but the browser window never grows to
+  // fill the screen and nothing visibly happens. fullscreen_callback_ hands
+  // this to Rust's set_browser_fullscreen (lib.rs), which takes the OS
+  // window itself fullscreen, shrinks the chrome webview to nothing, and
+  // grows the browser to cover the whole screen — merely growing the
+  // browser's own rect turned out not to be enough on its own: Z-order
+  // between a WebView2 surface and a CEF child window isn't something
+  // SetWindowPos can arbitrate, so the webview has to actually get out of
+  // the way rather than just be painted over.
+  void OnFullscreenModeChange(CefRefPtr<CefBrowser> browser,
+                               bool fullscreen) override;
 
   // CefClient method. CefDisplayHandler::OnScrollOffsetChanged only exists
   // for OSR (off-screen rendering) browsers per its own docs, and this app
@@ -249,6 +264,15 @@ class StrataClient : public CefClient,
   static void SetCrashCallback(void (*callback)(unsigned long long browser_id,
                                                   const char* reason));
 
+  // Called once from strata_bridge.cpp during startup. `callback` fires
+  // from OnFullscreenModeChange with the id of the browser whose page
+  // entered/exited HTML5 fullscreen (fullscreen non-zero on entry, zero on
+  // exit — plain int rather than bool to match the extern "C" bridge
+  // function's own signature exactly, same convention as is_private/visible
+  // elsewhere in this header).
+  static void SetFullscreenCallback(void (*callback)(unsigned long long browser_id,
+                                                        int fullscreen));
+
   // Bridge-facing helpers (called from strata_bridge.cpp, always on the
   // CEF UI thread — see strata_bridge.h):
 
@@ -281,6 +305,10 @@ class StrataClient : public CefClient,
     std::string favicon_url;
     double scroll_x = 0.0;
     double scroll_y = 0.0;
+    // Set by OnFullscreenModeChange; OnPreKeyEvent checks this to decide
+    // whether Escape should exit fullscreen (browser->GetHost()->
+    // ExitFullscreen()) or fall through to the page/chrome as normal.
+    bool is_fullscreen = false;
   };
 
   // Reverse lookup: the Strata-side id for a CefBrowser, used wherever a
@@ -308,6 +336,7 @@ class StrataClient : public CefClient,
                                        const char* origin,
                                        const char* kind);
   static void (*crash_callback_)(unsigned long long browser_id, const char* reason);
+  static void (*fullscreen_callback_)(unsigned long long browser_id, int fullscreen);
 
   // A pending permission request, waiting on RespondPermission — exactly
   // one of the two callback members is set, matching which handler created

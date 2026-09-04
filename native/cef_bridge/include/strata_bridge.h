@@ -117,6 +117,17 @@ STRATA_API void strata_cef_respond_permission(unsigned long long request_id,
 STRATA_API void strata_cef_set_crash_callback(
     void (*callback)(unsigned long long browser_id, const char* reason));
 
+// Registers the function CEF calls whenever a page enters/exits HTML5
+// fullscreen (Element.requestFullscreen()/exitFullscreen() — a video
+// site's own fullscreen button, for example). browser_id is which tab;
+// fullscreen is non-zero on entry, zero on exit. CEF does not resize
+// anything itself on this — the Rust side is responsible for growing the
+// browser's native window to cover the whole app window (see
+// set_browser_fullscreen in lib.rs) and shrinking it back afterward. Call
+// once during startup, same thread rules as strata_cef_set_shortcut_callback.
+STRATA_API void strata_cef_set_fullscreen_callback(
+    void (*callback)(unsigned long long browser_id, int fullscreen));
+
 // Creates a browser embedded as a child window of parent_hwnd, filling the
 // rectangle (x, y, width, height) in that parent's client coordinates
 // (top-left origin), and navigates it to url. Returns a browser id (> 0)

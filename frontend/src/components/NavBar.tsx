@@ -53,11 +53,18 @@ export function NavBar() {
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Gates the whole suggestion pipeline on the field actually being
+  // focused — `draft` also changes on its own (the sync effect above,
+  // driven by the tab-state poll) every time the page navigates, and
+  // without this gate that alone was enough to search history for the
+  // page's own URL, find its own visit, and pop the dropdown open with no
+  // one typing anything.
+  const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const query = draft.trim();
-    if (!query || isReadOnlyPage || activeTab?.isPrivate) {
+    if (!isFocused || !query || isReadOnlyPage || activeTab?.isPrivate) {
       setSuggestions([]);
       setSuggestionsOpen(false);
       return;
@@ -73,7 +80,21 @@ export function NavBar() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft, isReadOnlyPage, activeTab?.isPrivate]);
+  }, [draft, isFocused, isReadOnlyPage, activeTab?.isPrivate]);
+
+  // The dropdown is chrome-webview content, but it can grow tall enough to
+  // overlap the region where CEF's native browser child window sits — and
+  // that native window always paints over the chrome webview regardless of
+  // DOM z-index (same constraint Continuum/modals hit). Hiding the browser
+  // and growing the webview to full-window (set_modal_open, already used
+  // by SaveMomentDialog/CommandPalette for exactly this) is what actually
+  // lets the dropdown render on top instead of underneath the page.
+  useEffect(() => {
+    invoke("set_modal_open", { open: suggestionsOpen });
+    return () => {
+      if (suggestionsOpen) void invoke("set_modal_open", { open: false });
+    };
+  }, [suggestionsOpen]);
 
   // Ctrl+L (App.tsx's global shortcut handler) focuses the address bar via
   // this event rather than a prop/ref threaded down from App — the two
@@ -189,12 +210,16 @@ export function NavBar() {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onFocus={() => {
+                setIsFocused(true);
                 if (suggestions.length > 0) setSuggestionsOpen(true);
               }}
               onBlur={() => {
                 // Let a suggestion row's onMouseDown (below) fire and commit
                 // navigation before the dropdown disappears out from under it.
-                setTimeout(() => setSuggestionsOpen(false), 100);
+                setTimeout(() => {
+                  setIsFocused(false);
+                  setSuggestionsOpen(false);
+                }, 100);
               }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown" && suggestionsOpen) {

@@ -176,6 +176,11 @@ void strata_cef_set_crash_callback(
   StrataClient::SetCrashCallback(callback);
 }
 
+void strata_cef_set_fullscreen_callback(
+    void (*callback)(unsigned long long browser_id, int fullscreen)) {
+  StrataClient::SetFullscreenCallback(callback);
+}
+
 unsigned long long strata_cef_create_browser(void* parent_hwnd,
                                               int x,
                                               int y,

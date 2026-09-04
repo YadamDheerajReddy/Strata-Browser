@@ -219,6 +219,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A page entered/exited HTML5 fullscreen (a video site's own fullscreen
+  // button, etc. — see strata_client.cpp's OnFullscreenModeChange). The
+  // actual visual effect (covering the whole window, hiding the tab/nav/
+  // bookmarks bars) happens natively once set_browser_fullscreen resizes
+  // the browser; nothing here needs to touch React's own layout.
+  useEffect(() => {
+    const unlisten = listen<{ browserId: number; fullscreen: boolean }>(
+      "browser-fullscreen",
+      (event) => {
+        void invoke("set_browser_fullscreen", {
+          browserId: event.payload.browserId,
+          fullscreen: event.payload.fullscreen,
+        });
+      }
+    );
+    return () => {
+      void unlisten.then((f) => f());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clicking a history entry opens it in a fresh tab and puts the History
   // page away — there's no CEF browser behind the History tab itself to
   // navigate.
