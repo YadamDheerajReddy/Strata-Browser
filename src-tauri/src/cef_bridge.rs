@@ -70,6 +70,7 @@ extern "C" {
         favicon_buf: *mut c_char,
         favicon_buf_len: c_int,
     ) -> c_int;
+    fn strata_cef_scroll_to(browser_id: u64, x: f64, y: f64);
     fn strata_cef_shutdown();
 }
 
@@ -420,6 +421,14 @@ pub fn get_tab_state(browser_id: u64) -> Option<TabState> {
 fn cstr_buf_to_string(buf: &[u8]) -> String {
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     String::from_utf8_lossy(&buf[..len]).into_owned()
+}
+
+/// Reapplies a captured scroll position (RestoreManager, Implementation
+/// Plan Phase 4) — see checkpoint_page_state/get_tab_state for how it was
+/// originally captured. The caller is responsible for waiting until the
+/// target tab has finished loading first.
+pub fn scroll_to(browser_id: u64, x: f64, y: f64) {
+    unsafe { strata_cef_scroll_to(browser_id, x, y) }
 }
 
 /// Call once, after every browser has closed, right before process exit —

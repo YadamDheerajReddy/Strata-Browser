@@ -399,6 +399,10 @@ bool StrataClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
       action = "new_private_tab";
     } else if (shift_down && event.windows_key_code == 'R') {
       action = "open_continuum";
+    } else if (shift_down && event.windows_key_code == 'M') {
+      action = "save_moment";
+    } else if (shift_down && event.windows_key_code == 'F') {
+      action = "freeze_moment";
     } else if (!shift_down) {
       switch (event.windows_key_code) {
         case 'T':

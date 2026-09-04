@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cef_bridge::run_cef;
-use storage::{Bookmark, DownloadEntry, HistoryEntry, Profile, Storage};
+use storage::{Bookmark, DownloadEntry, HistoryEntry, Moment, MomentDetail, MomentTabInput, Profile, Storage};
 use tauri::{Emitter, Listener, Manager, PhysicalPosition, PhysicalSize, Rect, WindowEvent};
 
 // Fixed chrome height in CSS pixels (title bar h-8 + tab bar h-11 + nav bar
@@ -556,6 +556,77 @@ fn list_downloads(data: tauri::State<AppData>) -> Vec<DownloadEntry> {
     data.storage.list_downloads(&data.profile_id()).unwrap_or_default()
 }
 
+// --- Moments (Implementation Plan Phase 4) ---
+
+fn hostname_from_url(url: &str) -> String {
+    let without_scheme = url.split("://").nth(1).unwrap_or(url);
+    without_scheme.split('/').next().unwrap_or(without_scheme).to_string()
+}
+
+/// Save Moment: every tab the frontend hands over (already filtered down to
+/// non-private "web" tabs — see lib/moments.ts's saveCurrentMoment) becomes
+/// one workspace snapshot.
+#[tauri::command]
+fn save_moment(data: tauri::State<AppData>, name: String, tabs: Vec<MomentTabInput>) -> Result<Moment, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Moment name can't be empty".to_string());
+    }
+    if tabs.is_empty() {
+        return Err("Nothing to save".to_string());
+    }
+    data.storage
+        .save_moment(&data.profile_id(), name, "explicit_save", &tabs)
+        .map_err(|e| e.to_string())
+}
+
+/// Freeze: a single tab, auto-named from its title (falling back to its
+/// hostname for a tab with no title yet) — App Flow doc §5. The frontend is
+/// responsible for closing the tab afterward, same "Rust records, React
+/// acts" split as everywhere else Continuum touches tab lifecycle.
+#[tauri::command]
+fn freeze_tab(data: tauri::State<AppData>, tab: MomentTabInput) -> Result<Moment, String> {
+    let name = if tab.title.trim().is_empty() {
+        hostname_from_url(&tab.url)
+    } else {
+        tab.title.clone()
+    };
+    data.storage
+        .save_moment(&data.profile_id(), &name, "freeze", std::slice::from_ref(&tab))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_moments(data: tauri::State<AppData>) -> Vec<Moment> {
+    data.storage.list_moments(&data.profile_id()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_moment(data: tauri::State<AppData>, id: String) -> Option<MomentDetail> {
+    data.storage.get_moment(&id).ok().flatten()
+}
+
+#[tauri::command]
+fn delete_moment(data: tauri::State<AppData>, id: String) -> Result<(), String> {
+    data.storage.delete_moment(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_moment(data: tauri::State<AppData>, id: String, name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Name can't be empty".to_string());
+    }
+    data.storage.rename_moment(&id, name).map_err(|e| e.to_string())
+}
+
+/// RestoreManager's scroll step — called once a restored tab has finished
+/// loading (see lib/moments.ts's restoreMoment).
+#[tauri::command]
+fn restore_scroll(app: tauri::AppHandle, browser_id: u64, x: f64, y: f64) {
+    run_cef(&app, move || cef_bridge::scroll_to(browser_id, x, y));
+}
+
 // --- Profiles (Implementation Plan Phase 2) ---
 
 #[tauri::command]
@@ -662,6 +733,13 @@ pub fn run() {
             list_history,
             clear_history,
             list_downloads,
+            save_moment,
+            freeze_tab,
+            list_moments,
+            get_moment,
+            delete_moment,
+            rename_moment,
+            restore_scroll,
             current_profile,
             list_profiles,
             create_profile,

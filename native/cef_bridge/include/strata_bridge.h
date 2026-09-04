@@ -192,6 +192,16 @@ STRATA_API int strata_cef_get_tab_state(unsigned long long browser_id,
                                          char* favicon_buf,
                                          int favicon_buf_len);
 
+// Reapplies a previously captured scroll position (RestoreManager,
+// Implementation Plan Phase 4) — a plain window.scrollTo(), the same
+// mechanism used in reverse by StateCollector's scroll reporting (see
+// strata_app.cpp's OnContextCreated). Silently does nothing if browser_id
+// is unknown; the caller is responsible for waiting until the page has
+// finished loading before calling this.
+STRATA_API void strata_cef_scroll_to(unsigned long long browser_id,
+                                      double x,
+                                      double y);
+
 // Shuts CEF down. Call once, after every browser has been closed, right
 // before process exit. Do not call any other function afterward.
 STRATA_API void strata_cef_shutdown(void);

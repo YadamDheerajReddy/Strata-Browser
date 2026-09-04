@@ -144,6 +144,17 @@ export function ContinuumPanel() {
                 })
               )}
             </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                window.dispatchEvent(new CustomEvent("strata:save-moment"));
+              }}
+              className="mx-4 mb-4 shrink-0 rounded-lg bg-gradient-to-r from-[color:var(--color-accent)] to-[color:var(--color-accent-2)] px-4 py-2.5 text-sm font-medium text-white"
+            >
+              Save Current Moment
+            </button>
           </motion.div>
         </>
       )}

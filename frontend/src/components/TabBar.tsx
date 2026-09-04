@@ -1,8 +1,47 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Download, Globe, History, Loader2, Plus, Search, VenetianMask, X } from "lucide-react";
+import { Download, Globe, History, Loader2, Plus, Search, Snowflake, VenetianMask, X } from "lucide-react";
 import { useTabsStore } from "../stores/tabsStore";
+import { freezeTab } from "../lib/moments";
 import type { Tab } from "../types/tab";
+
+// Right-click menu on a tab pill — just Freeze Moment for now (App Flow doc
+// §5). The UI/UX Brief's fuller list (Duplicate, Pin, Mute, Split, Save
+// Moment, Close) waits on those features actually existing; a menu item
+// that does nothing is worse than no menu item.
+function TabContextMenu({ tab, onClose }: { tab: Tab; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [onClose]);
+
+  const canFreeze = tab.kind === "web" && !tab.isPrivate;
+
+  return (
+    <div
+      ref={ref}
+      className="absolute left-0 top-9 z-30 w-44 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] py-1.5 shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5)]"
+    >
+      <button
+        type="button"
+        disabled={!canFreeze}
+        onClick={() => {
+          onClose();
+          void freezeTab(tab.id);
+        }}
+        className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-[color:var(--color-text-secondary)] hover:bg-[color:var(--color-surface-2)] hover:text-[color:var(--color-text-primary)] disabled:opacity-30 disabled:hover:bg-transparent"
+      >
+        <Snowflake size={13} strokeWidth={1.75} />
+        Freeze Moment
+      </button>
+    </div>
+  );
+}
 
 // Pill-shaped tabs with the three quiet states from UI/UX Brief §4: normal
 // (favicon/globe), active (elevated surface + accent ring), changed (amber
@@ -17,6 +56,7 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
   const setActiveTab = useTabsStore((s) => s.setActiveTab);
   const closeTab = useTabsStore((s) => s.closeTab);
   const [faviconFailed, setFaviconFailed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <motion.button
@@ -25,6 +65,10 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
       animate={{ scale: 1, opacity: 1 }}
       transition={{ duration: 0.15 }}
       onClick={() => setActiveTab(tab.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenuOpen(true);
+      }}
       className={`group relative flex h-8 max-w-52 min-w-32 shrink-0 items-center gap-2 rounded-lg px-3 text-sm transition-colors ${
         isActive
           ? "bg-[color:var(--color-surface-2)] text-[color:var(--color-text-primary)] ring-1 ring-[color:var(--color-accent)]/50"
@@ -74,6 +118,8 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
       >
         <X size={12} strokeWidth={2} />
       </span>
+
+      {menuOpen && <TabContextMenu tab={tab} onClose={() => setMenuOpen(false)} />}
     </motion.button>
   );
 }

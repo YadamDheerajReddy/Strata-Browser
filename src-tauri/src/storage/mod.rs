@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub struct Storage {
     conn: Mutex<Connection>,
@@ -56,6 +56,60 @@ pub struct DownloadEntry {
     pub status: String,
     pub started_at: i64,
     pub completed_at: Option<i64>,
+}
+
+// --- Moments (Implementation Plan Phase 4) ---
+
+/// One captured tab, as sent up from the frontend at save/freeze time —
+/// tab_id is the frontend's ephemeral tab id (meaningless after restart,
+/// but harmless to record alongside the MOMENT_SAVED/MOMENT_FROZEN
+/// navigation_event it produces, same as navigation_events already does).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentTabInput {
+    pub tab_id: String,
+    pub url: String,
+    pub title: String,
+    pub favicon_url: Option<String>,
+    pub scroll_x: f64,
+    pub scroll_y: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentTabSummary {
+    pub url: String,
+    pub title: String,
+    pub favicon_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Moment {
+    pub id: String,
+    pub name: String,
+    pub tab_count: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub tabs: Vec<MomentTabSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentTabDetail {
+    pub url: String,
+    pub title: String,
+    pub favicon_url: Option<String>,
+    pub scroll_x: f64,
+    pub scroll_y: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentDetail {
+    pub id: String,
+    pub name: String,
+    pub tabs: Vec<MomentTabDetail>,
 }
 
 fn now_unix() -> i64 {
@@ -178,6 +232,15 @@ impl Storage {
     pub fn delete_profile(&self, id: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM moment_events WHERE moment_id IN (SELECT id FROM moments WHERE profile_id = ?1)",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM moment_tabs WHERE moment_id IN (SELECT id FROM moments WHERE profile_id = ?1)",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM moments WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM navigation_events WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM page_states WHERE profile_id = ?1", params![id])?;
         tx.execute("DELETE FROM bookmarks WHERE profile_id = ?1", params![id])?;
@@ -441,6 +504,175 @@ impl Storage {
             "INSERT INTO settings (profile_id, key, value, updated_at) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(IFNULL(profile_id, ''), key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             params![profile_id, key, value, now_unix()],
+        )?;
+        Ok(())
+    }
+
+    // --- Moments: MomentManager (save/freeze) + RestoreManager's read side ---
+
+    /// The one write path for both Save Moment (`source: "explicit_save"`,
+    /// every open tab) and Freeze (`source: "freeze"`, a single tab) — App
+    /// Flow doc §5/§6 treats them as the same capture, differing only in
+    /// framing and in what the frontend does afterward (Freeze closes the
+    /// tab; Save doesn't). Each tab gets an immediate (non-debounced)
+    /// page_states checkpoint per the TRD's "explicit Moments bypass the
+    /// debounce window" rule, linked from its moment_tabs row so
+    /// RestoreManager can reapply the exact captured scroll position, plus
+    /// a MOMENT_SAVED/MOMENT_FROZEN navigation_event cross-linked via
+    /// moment_events.
+    pub fn save_moment(
+        &self,
+        profile_id: &str,
+        name: &str,
+        source: &str,
+        tabs: &[MomentTabInput],
+    ) -> rusqlite::Result<Moment> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let moment_id = uuid::Uuid::new_v4().to_string();
+        let now = now_unix();
+        let event_type = if source == "freeze" { "MOMENT_FROZEN" } else { "MOMENT_SAVED" };
+
+        tx.execute(
+            "INSERT INTO moments (id, profile_id, name, source, tab_count, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![moment_id, profile_id, name, source, tabs.len() as i64, now],
+        )?;
+
+        let mut summaries = Vec::with_capacity(tabs.len());
+        for (i, tab) in tabs.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO page_states
+                    (profile_id, tab_id, url, title, favicon_url, scroll_x, scroll_y, navigation_index, is_checkpoint, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8)",
+                params![profile_id, tab.tab_id, tab.url, tab.title, tab.favicon_url, tab.scroll_x, tab.scroll_y, now],
+            )?;
+            let page_state_id = tx.last_insert_rowid();
+
+            tx.execute(
+                "INSERT INTO moment_tabs (moment_id, tab_order, url, title, favicon_url, page_state_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![moment_id, i as i64, tab.url, tab.title, tab.favicon_url, page_state_id],
+            )?;
+
+            tx.execute(
+                "INSERT INTO navigation_events (profile_id, tab_id, type, url, title, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![profile_id, tab.tab_id, event_type, tab.url, tab.title, now],
+            )?;
+            let nav_event_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO moment_events (moment_id, navigation_event_id) VALUES (?1, ?2)",
+                params![moment_id, nav_event_id],
+            )?;
+
+            summaries.push(MomentTabSummary {
+                url: tab.url.clone(),
+                title: tab.title.clone(),
+                favicon_url: tab.favicon_url.clone(),
+            });
+        }
+
+        tx.commit()?;
+        Ok(Moment {
+            id: moment_id,
+            name: name.to_string(),
+            tab_count: tabs.len() as i64,
+            created_at: now,
+            updated_at: now,
+            tabs: summaries,
+        })
+    }
+
+    /// Newest-first, each with its captured tabs — enough for the homepage's
+    /// "4 tabs" copy and a preview of what's inside without a second
+    /// round-trip per Moment.
+    pub fn list_moments(&self, profile_id: &str) -> rusqlite::Result<Vec<Moment>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, tab_count, created_at, updated_at FROM moments
+             WHERE profile_id = ?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![profile_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut moments = Vec::with_capacity(rows.len());
+        for (id, name, tab_count, created_at, updated_at) in rows {
+            let mut tab_stmt = conn.prepare(
+                "SELECT url, title, favicon_url FROM moment_tabs WHERE moment_id = ?1 ORDER BY tab_order ASC",
+            )?;
+            let tabs = tab_stmt
+                .query_map(params![id], |row| {
+                    Ok(MomentTabSummary {
+                        url: row.get(0)?,
+                        title: row.get(1)?,
+                        favicon_url: row.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            moments.push(Moment { id, name, tab_count, created_at, updated_at, tabs });
+        }
+        Ok(moments)
+    }
+
+    /// Full detail for RestoreManager — each tab's captured scroll
+    /// position alongside its url/title, read via a LEFT JOIN so a tab with
+    /// no linked page_state (shouldn't happen, but not fatal) still comes
+    /// back with a sane 0,0 default instead of failing the whole restore.
+    pub fn get_moment(&self, id: &str) -> rusqlite::Result<Option<MomentDetail>> {
+        let conn = self.conn.lock().unwrap();
+        let name: Option<String> = conn
+            .query_row("SELECT name FROM moments WHERE id = ?1", params![id], |row| row.get(0))
+            .optional()?;
+        let Some(name) = name else { return Ok(None) };
+
+        let mut stmt = conn.prepare(
+            "SELECT mt.url, mt.title, mt.favicon_url, COALESCE(ps.scroll_x, 0), COALESCE(ps.scroll_y, 0)
+             FROM moment_tabs mt LEFT JOIN page_states ps ON ps.id = mt.page_state_id
+             WHERE mt.moment_id = ?1 ORDER BY mt.tab_order ASC",
+        )?;
+        let tabs = stmt
+            .query_map(params![id], |row| {
+                Ok(MomentTabDetail {
+                    url: row.get(0)?,
+                    title: row.get(1)?,
+                    favicon_url: row.get(2)?,
+                    scroll_x: row.get(3)?,
+                    scroll_y: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(Some(MomentDetail { id: id.to_string(), name, tabs }))
+    }
+
+    /// Cascades to moment_tabs/moment_events; the page_states rows those
+    /// moment_tabs pointed at are deliberately left behind, becoming
+    /// eligible for the (not-yet-built) retention sweep once nothing
+    /// references them — Backend Schema §6.
+    pub fn delete_moment(&self, id: &str) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM moment_events WHERE moment_id = ?1", params![id])?;
+        tx.execute("DELETE FROM moment_tabs WHERE moment_id = ?1", params![id])?;
+        tx.execute("DELETE FROM moments WHERE id = ?1", params![id])?;
+        tx.commit()
+    }
+
+    pub fn rename_moment(&self, id: &str, name: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE moments SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, now_unix(), id],
         )?;
         Ok(())
     }

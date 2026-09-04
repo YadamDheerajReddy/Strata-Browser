@@ -12,8 +12,10 @@ import { Logo } from "./components/Logo";
 import { PermissionPrompt } from "./components/PermissionPrompt";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { ContinuumPanel } from "./components/ContinuumPanel";
+import { SaveMomentDialog } from "./components/SaveMomentDialog";
 import { useTabsStore } from "./stores/tabsStore";
 import { useBookmarksStore } from "./stores/bookmarksStore";
+import { freezeTab } from "./lib/moments";
 
 // The full set of chrome-level shortcut actions — shared between the DOM
 // keydown handler (fires when the chrome webview has focus) and the
@@ -31,7 +33,9 @@ type Action =
   | "history"
   | "downloads"
   | "next_tab"
-  | "open_continuum";
+  | "open_continuum"
+  | "save_moment"
+  | "freeze_moment";
 
 export default function App() {
   const tabs = useTabsStore((s) => s.tabs);
@@ -115,6 +119,12 @@ export default function App() {
       case "open_continuum":
         window.dispatchEvent(new CustomEvent("strata:toggle-continuum"));
         break;
+      case "save_moment":
+        window.dispatchEvent(new CustomEvent("strata:save-moment"));
+        break;
+      case "freeze_moment":
+        if (activeTab) void freezeTab(activeTab.id);
+        break;
     }
   };
 
@@ -128,9 +138,13 @@ export default function App() {
           ? "new_private_tab"
           : e.shiftKey && key === "r"
             ? "open_continuum"
-            : e.shiftKey
-              ? null
-              : key === "t"
+            : e.shiftKey && key === "m"
+              ? "save_moment"
+              : e.shiftKey && key === "f"
+                ? "freeze_moment"
+                : e.shiftKey
+                  ? null
+                  : key === "t"
               ? "new_tab"
               : key === "w"
                 ? "close_tab"
@@ -197,6 +211,7 @@ export default function App() {
     <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[color:var(--color-bg)]">
       <PermissionPrompt />
       <ContinuumPanel />
+      <SaveMomentDialog />
 
       <div
         data-tauri-drag-region

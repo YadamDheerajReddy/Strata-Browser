@@ -120,6 +120,55 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
         CREATE INDEX idx_page_states_tab_time ON page_states(tab_id, timestamp DESC);
     "#,
     rollback_note: "DROP TABLE page_states.",
+}, Migration {
+    version: 3,
+    sql: r#"
+        -- Moments (Backend Schema §4, Implementation Plan Phase 4): the
+        -- durable, named workspace snapshot MomentManager saves/freezes and
+        -- RestoreManager reads back. window_layout is a JSON stub ('{}')
+        -- until Phase 5's Split View actually produces a layout to
+        -- serialize; thumbnail stays NULL until something captures one.
+        CREATE TABLE moments (
+            id TEXT PRIMARY KEY,
+            profile_id TEXT NOT NULL REFERENCES profiles(id),
+            name TEXT NOT NULL,
+            source TEXT NOT NULL,
+            window_layout TEXT NOT NULL DEFAULT '{}',
+            thumbnail TEXT,
+            tab_count INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX idx_moments_profile_time ON moments(profile_id, updated_at DESC);
+
+        -- moment_tabs: the tabs captured inside a Moment, in restore order.
+        -- split_group_id/split_position stay NULL until Phase 5;
+        -- page_state_id points at the exact scroll-position snapshot taken
+        -- at save time (see Storage::save_moment) for RestoreManager to
+        -- reapply.
+        CREATE TABLE moment_tabs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            moment_id TEXT NOT NULL REFERENCES moments(id),
+            tab_order INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            favicon_url TEXT,
+            split_group_id TEXT,
+            split_position REAL,
+            page_state_id INTEGER REFERENCES page_states(id)
+        );
+        CREATE INDEX idx_moment_tabs_moment ON moment_tabs(moment_id, tab_order);
+
+        -- moment_events: cross-links the navigation_events Rewind timeline
+        -- entry that became this Moment (MOMENT_SAVED/MOMENT_FROZEN), so a
+        -- later phase's Rewind view could show "this led to a Moment."
+        CREATE TABLE moment_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            moment_id TEXT NOT NULL REFERENCES moments(id),
+            navigation_event_id INTEGER NOT NULL REFERENCES navigation_events(id)
+        );
+    "#,
+    rollback_note: "DROP TABLE moment_events, moment_tabs, moments (in that order, for FK safety).",
 }];
 
 pub fn run(conn: &Connection) -> rusqlite::Result<()> {

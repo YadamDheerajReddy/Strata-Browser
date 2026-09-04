@@ -3,6 +3,7 @@
 #include <shlobj.h>
 #include <windows.h>
 
+#include <cstdio>
 #include <cstring>
 #include <map>
 
@@ -349,6 +350,21 @@ int strata_cef_get_tab_state(unsigned long long browser_id,
   CopyToBuffer(favicon_url, favicon_buf, favicon_buf_len);
 
   return 1;
+}
+
+void strata_cef_scroll_to(unsigned long long browser_id, double x, double y) {
+  if (!g_client) {
+    return;
+  }
+  CefRefPtr<CefBrowser> browser =
+      g_client->GetBrowser(static_cast<int>(browser_id));
+  if (!browser) {
+    return;
+  }
+  CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+  char script[128];
+  snprintf(script, sizeof(script), "window.scrollTo(%f, %f);", x, y);
+  frame->ExecuteJavaScript(script, frame->GetURL(), 0);
 }
 
 void strata_cef_shutdown(void) {

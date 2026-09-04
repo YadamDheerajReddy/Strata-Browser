@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowRight, Globe, Search } from "lucide-react";
+import { ArrowRight, Globe, Pencil, Search, X } from "lucide-react";
 import type { HistoryEntry } from "../types/bookmark";
 import { useTabsStore } from "../stores/tabsStore";
+import { useMomentsStore, type Moment } from "../stores/momentsStore";
+import { restoreMoment } from "../lib/moments";
 import { Logo } from "./Logo";
 
 function relativeTime(unixSeconds: number): string {
@@ -40,26 +42,54 @@ const WORDMARK = "STRATA".split("");
 // look at recent activity. Given its own room to be a *destination* rather
 // than quiet chrome (unlike the rest of the brief's "motion confirms state,
 // not decoration" restraint — the tab bar and nav bar stay quiet, this page
-// is the one place meant to feel premium at a glance). "Continue" below is
-// backed by real history; the brief's "Moments" row (grouping browsing into
-// named sessions) needs actual session-tracking that doesn't exist yet, so
-// it's left out entirely rather than filled with placeholder data.
+// is the one place meant to feel premium at a glance). "Continue" is backed
+// by real history; "Moments" (Implementation Plan Phase 4) is backed by
+// real saved/frozen workspaces — both omitted entirely rather than shown
+// empty when there's nothing yet (App Flow doc §2).
 export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boolean }) {
   const navigateFromHome = useTabsStore((s) => s.navigateFromHome);
+  const moments = useMomentsStore((s) => s.moments);
+  const refreshMoments = useMomentsStore((s) => s.refresh);
+  const removeMoment = useMomentsStore((s) => s.remove);
+  const renameMoment = useMomentsStore((s) => s.rename);
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<HistoryEntry[]>([]);
   const [focused, setFocused] = useState(false);
   const [glow, setGlow] = useState({ x: 50, y: 50 });
   const [glowVisible, setGlowVisible] = useState(false);
+  const [restoring, setRestoring] = useState<{ name: string; tabs: string[] } | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // A private tab's home page shows no "Continue" — real browsing history
-    // has no business appearing on a page whose whole point is not leaving
-    // one (see tabsStore's makeHomeTab).
-    if (!isPrivate) invoke<HistoryEntry[]>("list_history", { limit: 4 }).then(setRecent);
+    // A private tab's home page shows no "Continue"/"Moments" — real
+    // browsing context has no business appearing on a page whose whole
+    // point is not leaving one (see tabsStore's makeHomeTab).
+    if (!isPrivate) {
+      invoke<HistoryEntry[]>("list_history", { limit: 4 }).then(setRecent);
+      void refreshMoments();
+    }
     inputRef.current?.focus();
-  }, [isPrivate]);
+  }, [isPrivate, refreshMoments]);
+
+  const handleRestore = async (moment: Moment) => {
+    setRestoring({ name: moment.name, tabs: moment.tabs.map((t) => t.title || t.url) });
+    await restoreMoment(moment.id);
+    setTimeout(() => setRestoring(null), 600);
+  };
+
+  const startRename = (moment: Moment) => {
+    setRenamingId(moment.id);
+    setRenameValue(moment.name);
+  };
+
+  const commitRename = async () => {
+    if (renamingId && renameValue.trim()) {
+      await renameMoment(renamingId, renameValue.trim());
+    }
+    setRenamingId(null);
+  };
 
   const submit = () => {
     if (!query.trim()) return;
@@ -225,7 +255,125 @@ export function HomePage({ tabId, isPrivate }: { tabId: string; isPrivate: boole
             </div>
           </motion.div>
         )}
+
+        {moments.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.7 }}
+            className="mt-8 w-full"
+          >
+            <span className="chrome-label mb-3 block">Moments</span>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {moments.map((moment, i) => (
+                <motion.div
+                  key={moment.id}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.35, delay: 0.75 + i * 0.06 }}
+                  whileHover={{ y: -3 }}
+                  className="group relative flex flex-col gap-2.5 overflow-hidden rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-surface)]/90 p-3 text-left backdrop-blur-sm transition-colors hover:border-[color:var(--color-accent-2)]/40 hover:bg-[color:var(--color-surface-2)]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void handleRestore(moment)}
+                    className="flex flex-col gap-2.5 text-left"
+                  >
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[color:var(--color-surface-2)]">
+                      {moment.tabs[0]?.faviconUrl ? (
+                        <img src={moment.tabs[0].faviconUrl} alt="" className="h-4 w-4 rounded-sm" />
+                      ) : (
+                        <Globe size={15} strokeWidth={1.75} className="text-[color:var(--color-text-secondary)]" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      {renamingId === moment.id ? (
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => void commitRename()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void commitRename();
+                            if (e.key === "Escape") setRenamingId(null);
+                          }}
+                          className="w-full truncate rounded border border-[color:var(--color-accent)] bg-[color:var(--color-bg)] px-1 text-sm text-[color:var(--color-text-primary)] outline-none"
+                        />
+                      ) : (
+                        <p className="truncate text-sm text-[color:var(--color-text-primary)]">{moment.name}</p>
+                      )}
+                      <p className="truncate text-xs text-[color:var(--color-text-secondary)]">
+                        {moment.tabCount} tab{moment.tabCount === 1 ? "" : "s"} · {relativeTime(moment.updatedAt)}
+                      </p>
+                    </div>
+                  </button>
+                  <div className="absolute right-1.5 top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      type="button"
+                      aria-label="Rename Moment"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(moment);
+                      }}
+                      className="rounded p-1 text-[color:var(--color-text-secondary)] hover:bg-black/20 hover:text-[color:var(--color-text-primary)]"
+                    >
+                      <Pencil size={11} strokeWidth={1.75} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Delete Moment"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void removeMoment(moment.id);
+                      }}
+                      className="rounded p-1 text-[color:var(--color-text-secondary)] hover:bg-black/20 hover:text-[color:var(--color-text-primary)]"
+                    >
+                      <X size={11} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-[color:var(--color-accent-2)] to-[color:var(--color-accent)] opacity-0 transition-opacity group-hover:opacity-100" />
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
       </div>
+
+      {/* Moment restoration transition (UI/UX Brief §8: "brief 'Restoring
+          Moment…' list of tab names, then a natural transition into the
+          restored workspace — never an abrupt cut"). */}
+      <AnimatePresence>
+        {restoring && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-[color:var(--color-bg)]/80 backdrop-blur-sm"
+          >
+            <div className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-6 py-5 text-center shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5)]">
+              <p className="mb-3 text-sm text-[color:var(--color-text-secondary)]">
+                Restoring <span className="text-[color:var(--color-text-primary)]">{restoring.name}</span>…
+              </p>
+              <ul className="space-y-1">
+                {restoring.tabs.map((title, i) => (
+                  <motion.li
+                    key={i}
+                    initial={{ opacity: 0, x: -6 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.08 }}
+                    className="text-xs text-[color:var(--color-text-secondary)]"
+                  >
+                    <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-accent-2)]" />
+                    {title}
+                  </motion.li>
+                ))}
+              </ul>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
