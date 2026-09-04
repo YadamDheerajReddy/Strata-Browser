@@ -107,6 +107,16 @@ STRATA_API void strata_cef_set_permission_callback(
 STRATA_API void strata_cef_respond_permission(unsigned long long request_id,
                                                int allow);
 
+// Registers the function CEF calls whenever a tab's renderer process
+// terminates unexpectedly (crash, kill, out-of-memory) — Implementation
+// Plan Phase 6's crash recovery. browser_id is which tab; reason is a
+// short, stable string ("crashed", "killed", "oom", "abnormal") for a
+// friendlier message than CEF's raw termination code. The browser itself
+// survives and can still be navigated/reloaded afterward. Call once during
+// startup, same thread rules as strata_cef_set_shortcut_callback.
+STRATA_API void strata_cef_set_crash_callback(
+    void (*callback)(unsigned long long browser_id, const char* reason));
+
 // Creates a browser embedded as a child window of parent_hwnd, filling the
 // rectangle (x, y, width, height) in that parent's client coordinates
 // (top-left origin), and navigates it to url. Returns a browser id (> 0)

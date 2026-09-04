@@ -43,6 +43,7 @@ extern "C" {
         callback: extern "C" fn(u64, u64, *const c_char, *const c_char),
     );
     fn strata_cef_respond_permission(request_id: u64, allow: c_int);
+    fn strata_cef_set_crash_callback(callback: extern "C" fn(u64, *const c_char));
     fn strata_cef_create_browser(
         parent_hwnd: *mut c_void,
         x: c_int,
@@ -299,6 +300,34 @@ extern "C" fn handle_permission_callback(
 /// Answers a pending permission request — see set_permission_forwarding.
 pub fn respond_permission(request_id: u64, allow: bool) {
     unsafe { strata_cef_respond_permission(request_id, allow as c_int) }
+}
+
+/// A tab's renderer process terminating unexpectedly — Implementation Plan
+/// Phase 6's crash recovery. `reason` is one of "crashed"/"killed"/"oom"/
+/// "abnormal" (see strata_client.cpp's OnRenderProcessTerminated).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashEvent {
+    pub browser_id: u64,
+    pub reason: String,
+}
+
+/// Starts forwarding CEF renderer-crash notifications as a window-scoped
+/// "tab-crashed" event. Without this, a crashed tab is just a permanently
+/// blank rect with no indication anything happened — see
+/// strata_client.cpp's OnRenderProcessTerminated.
+pub fn set_crash_forwarding(app: AppHandle<Wry>) {
+    let _ = APP_HANDLE.set(app);
+    unsafe { strata_cef_set_crash_callback(handle_crash_callback) };
+}
+
+extern "C" fn handle_crash_callback(browser_id: u64, reason: *const c_char) {
+    let Some(app) = APP_HANDLE.get() else { return };
+    let Some(label) = browser_windows().lock().unwrap().get(&browser_id).cloned() else {
+        return;
+    };
+    let event = CrashEvent { browser_id, reason: cstr_ptr_to_string(reason) };
+    let _ = app.emit_to(label, "tab-crashed", event);
 }
 
 fn cstr_ptr_to_string(ptr: *const c_char) -> String {

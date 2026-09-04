@@ -370,6 +370,34 @@ impl Storage {
         rows.collect()
     }
 
+    // Address-bar autocomplete (one row per URL, most recent visit wins) —
+    // a plain list_recent_history would show the same frequently-visited
+    // URL over and over instead of a spread of distinct matches.
+    pub fn search_history(&self, profile_id: &str, query: &str, limit: i64) -> rusqlite::Result<Vec<HistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, timestamp, metadata FROM navigation_events AS n1
+             WHERE profile_id = ?1 AND type = 'NAVIGATION'
+               AND (url LIKE ?2 OR title LIKE ?2)
+               AND id = (
+                 SELECT MAX(id) FROM navigation_events AS n2
+                 WHERE n2.profile_id = ?1 AND n2.type = 'NAVIGATION' AND n2.url = n1.url
+               )
+             ORDER BY timestamp DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![profile_id, pattern, limit], |row| {
+            Ok(HistoryEntry {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                title: row.get(2).unwrap_or_default(),
+                timestamp: row.get(3)?,
+                favicon_url: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn clear_history(&self, profile_id: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

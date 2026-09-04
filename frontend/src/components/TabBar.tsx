@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { Reorder } from "framer-motion";
 import { Download, Globe, History, Loader2, Plus, Search, Snowflake, VenetianMask, X } from "lucide-react";
 import { useTabsStore } from "../stores/tabsStore";
 import { freezeTab } from "../lib/moments";
@@ -59,10 +59,13 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <motion.button
+    <Reorder.Item
+      value={tab}
+      as="button"
       type="button"
       initial={{ scale: 0.98, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
+      whileDrag={{ scale: 1.04, zIndex: 1 }}
       transition={{ duration: 0.15 }}
       onClick={() => setActiveTab(tab.id)}
       onContextMenu={(e) => {
@@ -120,7 +123,7 @@ function TabPill({ tab, isActive }: { tab: Tab; isActive: boolean }) {
       </span>
 
       {menuOpen && <TabContextMenu tab={tab} onClose={() => setMenuOpen(false)} />}
-    </motion.button>
+    </Reorder.Item>
   );
 }
 
@@ -128,6 +131,7 @@ export function TabBar() {
   const tabs = useTabsStore((s) => s.tabs);
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const addTab = useTabsStore((s) => s.addTab);
+  const setTabOrder = useTabsStore((s) => s.setTabOrder);
 
   return (
     <div
@@ -138,12 +142,23 @@ export function TabBar() {
           actually need — the "+" button sits right after the last tab
           instead of being pushed to the far right of the window, but this
           can still shrink and scroll internally once there are enough tabs
-          to fill the available space. */}
-      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+          to fill the available space. Reorder.Group drives drag-to-reorder
+          via pointer events, not native HTML5/OS drag-and-drop — CEF's
+          native child windows intercept the latter before it ever reaches
+          the DOM (same issue that sank Split View's drag handles), so this
+          sidesteps it entirely instead of needing dragDropEnabled:false. */}
+      <Reorder.Group
+        as="div"
+        axis="x"
+        values={tabs}
+        onReorder={setTabOrder}
+        layoutScroll
+        className="flex min-w-0 items-center gap-1 overflow-x-auto"
+      >
         {tabs.map((tab) => (
           <TabPill key={tab.id} tab={tab} isActive={tab.id === activeTabId} />
         ))}
-      </div>
+      </Reorder.Group>
       <button
         type="button"
         aria-label="New tab"

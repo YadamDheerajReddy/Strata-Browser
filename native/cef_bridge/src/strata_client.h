@@ -12,6 +12,7 @@
 #include "include/cef_download_handler.h"
 #include "include/cef_keyboard_handler.h"
 #include "include/cef_permission_handler.h"
+#include "include/cef_request_handler.h"
 
 // Shared CefClient for every browser Strata creates — one per tab, per
 // TRD §3 (TabManager owns tab lifecycle; this is the CEF-side counterpart).
@@ -43,7 +44,8 @@ class StrataClient : public CefClient,
                       public CefKeyboardHandler,
                       public CefDownloadHandler,
                       public CefContextMenuHandler,
-                      public CefPermissionHandler {
+                      public CefPermissionHandler,
+                      public CefRequestHandler {
  public:
   StrataClient();
 
@@ -55,6 +57,7 @@ class StrataClient : public CefClient,
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
   CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return this; }
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
   // CefLifeSpanHandler methods:
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
@@ -72,7 +75,7 @@ class StrataClient : public CefClient,
                       int popup_id,
                       const CefString& target_url,
                       const CefString& target_frame_name,
-                      WindowOpenDisposition target_disposition,
+                      CefLifeSpanHandler::WindowOpenDisposition target_disposition,
                       bool user_gesture,
                       const CefPopupFeatures& popupFeatures,
                       CefWindowInfo& windowInfo,
@@ -179,6 +182,18 @@ class StrataClient : public CefClient,
       uint32_t requested_permissions,
       CefRefPtr<CefPermissionPromptCallback> callback) override;
 
+  // CefRequestHandler method. Chromium's own process-isolation model means
+  // a crashed/killed renderer never takes the whole app down (TRD §6's
+  // crash-recovery requirement) — but Alloy style shows nothing at all by
+  // default when this fires, leaving the tab a permanent blank rect with
+  // no indication anything went wrong. crash_callback_ hands this to Rust/
+  // React so the tab can show a real "this page crashed" recovery UI
+  // instead; the CefBrowser itself survives and can still be reloaded.
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                  TerminationStatus status,
+                                  int error_code,
+                                  const CefString& error_string) override;
+
   // Called once from strata_bridge.cpp during startup. `callback` receives
   // the Strata-side id (see the class comment above) of the browser the
   // keypress came from, plus a short, stable action name ("new_tab",
@@ -226,6 +241,13 @@ class StrataClient : public CefClient,
   // picks Allow/Block in the React prompt. A no-op if request_id doesn't
   // match anything pending (already answered, or its tab/prompt is gone).
   static void RespondPermission(unsigned long long request_id, bool allow);
+
+  // Called once from strata_bridge.cpp during startup. `callback` fires
+  // from OnRenderProcessTerminated with the id of the crashed tab's
+  // browser and a short, stable reason string ("crashed", "killed", "oom",
+  // "abnormal") for a friendlier message than CEF's raw termination code.
+  static void SetCrashCallback(void (*callback)(unsigned long long browser_id,
+                                                  const char* reason));
 
   // Bridge-facing helpers (called from strata_bridge.cpp, always on the
   // CEF UI thread — see strata_bridge.h):
@@ -285,6 +307,7 @@ class StrataClient : public CefClient,
                                        unsigned long long browser_id,
                                        const char* origin,
                                        const char* kind);
+  static void (*crash_callback_)(unsigned long long browser_id, const char* reason);
 
   // A pending permission request, waiting on RespondPermission — exactly
   // one of the two callback members is set, matching which handler created

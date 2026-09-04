@@ -171,6 +171,11 @@ void strata_cef_respond_permission(unsigned long long request_id, int allow) {
   StrataClient::RespondPermission(request_id, allow != 0);
 }
 
+void strata_cef_set_crash_callback(
+    void (*callback)(unsigned long long browser_id, const char* reason)) {
+  StrataClient::SetCrashCallback(callback);
+}
+
 unsigned long long strata_cef_create_browser(void* parent_hwnd,
                                               int x,
                                               int y,

@@ -18,6 +18,8 @@ function makeTab(browserId: number, url: string, isPrivate: boolean): Tab {
     canGoForward: false,
     faviconUrl: null,
     isPrivate,
+    crashed: false,
+    crashReason: null,
   };
 }
 
@@ -33,6 +35,8 @@ function makeInternalTab(kind: "history" | "downloads"): Tab {
     canGoForward: false,
     faviconUrl: null,
     isPrivate: false,
+    crashed: false,
+    crashReason: null,
   };
 }
 
@@ -54,6 +58,8 @@ function makeHomeTab(isPrivate: boolean): Tab {
     canGoForward: false,
     faviconUrl: null,
     isPrivate,
+    crashed: false,
+    crashReason: null,
   };
 }
 
@@ -88,17 +94,30 @@ interface TabsState {
   closeTab: (id: string, opts?: { quitIfEmpty?: boolean }) => Promise<void>;
   setActiveTab: (id: string) => Promise<void>;
   updateTab: (id: string, patch: Partial<Tab>) => void;
+  // Drag-to-reorder in TabBar (framer-motion's Reorder.Group) — just
+  // replaces the array wholesale with the order it already computed.
+  setTabOrder: (tabs: Tab[]) => void;
   refreshTabState: (id: string) => Promise<void>;
+  // Crash recovery (Implementation Plan Phase 6) — called from App.tsx's
+  // "tab-crashed" listener. Marks the tab crashed and, if it's the active
+  // one, immediately hides its (now-blank) browser in favor of
+  // CrashedPagePanel.
+  markCrashed: (browserId: number, reason: string) => Promise<void>;
+  // Reloads a crashed tab's browser in place (the CefBrowser survives a
+  // renderer crash and can be renavigated — see strata_client.cpp's
+  // OnRenderProcessTerminated) and, if active, reveals it again.
+  reloadCrashedTab: (id: string) => Promise<void>;
 }
 
 // Puts the right CEF browser on screen — or, for a History/Downloads/Home
-// tab, none at all (see set_panel_open in lib.rs for why those need the
-// whole webview instead of just the content strip) — for whichever tab
-// just became active. Every place that changes activeTabId funnels through
-// this so there's exactly one spot that knows how to reconcile the two.
+// tab (or a crashed "web" tab, which has nothing to show until reloaded),
+// none at all (see set_panel_open in lib.rs for why those need the whole
+// webview instead of just the content strip) — for whichever tab just
+// became active. Every place that changes activeTabId funnels through this
+// so there's exactly one spot that knows how to reconcile the two.
 async function syncBackendForActiveTab(tab: Tab | undefined) {
   if (!tab) return;
-  if (tab.kind === "web") {
+  if (tab.kind === "web" && !tab.crashed) {
     if (tab.browserId != null) {
       await invoke("activate_tab", { browserId: tab.browserId });
     }
@@ -232,6 +251,8 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)),
     })),
 
+  setTabOrder: (tabs) => set({ tabs }),
+
   // Polls the real CEF-side navigation state (title/url/back/forward/
   // loading/favicon) for one tab and syncs it into the store — see
   // App.tsx's polling loop. There's no push-based event for this yet
@@ -299,6 +320,26 @@ export const useTabsStore = create<TabsState>((set, get) => ({
           scrollY: backendState.scrollY,
         });
       }
+    }
+  },
+
+  markCrashed: async (browserId, reason) => {
+    const { tabs, activeTabId } = get();
+    const tab = tabs.find((t) => t.browserId === browserId);
+    if (!tab) return;
+    get().updateTab(tab.id, { crashed: true, crashReason: reason });
+    if (tab.id === activeTabId) {
+      await syncBackendForActiveTab({ ...tab, crashed: true });
+    }
+  },
+
+  reloadCrashedTab: async (id) => {
+    const tab = get().tabs.find((t) => t.id === id);
+    if (!tab || tab.browserId == null) return;
+    await invoke("reload_tab", { browserId: tab.browserId });
+    get().updateTab(id, { crashed: false, crashReason: null, isLoading: true });
+    if (get().activeTabId === id) {
+      await syncBackendForActiveTab({ ...tab, crashed: false });
     }
   },
 }));

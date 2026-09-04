@@ -632,6 +632,19 @@ fn list_history(data: tauri::State<AppData>, limit: i64) -> Vec<HistoryEntry> {
         .unwrap_or_default()
 }
 
+/// Address-bar autocomplete (NavBar.tsx) — a small, debounced, as-you-type
+/// query against the same navigation_events log list_history reads, not a
+/// separate index.
+#[tauri::command]
+fn search_history(data: tauri::State<AppData>, query: String, limit: i64) -> Vec<HistoryEntry> {
+    if query.trim().is_empty() {
+        return Vec::new();
+    }
+    data.storage
+        .search_history(&data.profile_id(), &query, limit)
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 fn clear_history(data: tauri::State<AppData>) {
     let _ = data.storage.clear_history(&data.profile_id());
@@ -827,6 +840,7 @@ pub fn run() {
             record_tab_created,
             checkpoint_page_state,
             list_history,
+            search_history,
             clear_history,
             list_downloads,
             save_moment,
@@ -879,6 +893,13 @@ pub fn run() {
                     handle_download_event(&download_app, ev);
                 }
             });
+
+            // A crashed/killed/OOM-ed renderer process (Implementation Plan
+            // Phase 6's crash recovery) — without this, Alloy style leaves a
+            // crashed tab as a permanently blank rect with no indication
+            // anything went wrong; the frontend shows a real recovery UI
+            // instead once it hears "tab-crashed" (see tabsStore.ts).
+            cef_bridge::set_crash_forwarding(app.handle().clone());
 
             // CEF gets no other opportunity to run browser-process work in
             // this configuration (see strata_bridge.h) — pump it at a

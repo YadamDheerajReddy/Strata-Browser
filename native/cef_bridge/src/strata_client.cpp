@@ -71,6 +71,8 @@ void (*StrataClient::permission_callback_)(unsigned long long request_id,
                                             unsigned long long browser_id,
                                             const char* origin,
                                             const char* kind) = nullptr;
+void (*StrataClient::crash_callback_)(unsigned long long browser_id,
+                                       const char* reason) = nullptr;
 std::map<unsigned long long, StrataClient::PendingPermission>
     StrataClient::pending_permissions_;
 // Started well above where CEF's own OnShowPermissionPrompt prompt_id
@@ -131,7 +133,7 @@ bool StrataClient::OnBeforePopup(
     int popup_id,
     const CefString& target_url,
     const CefString& target_frame_name,
-    WindowOpenDisposition target_disposition,
+    CefLifeSpanHandler::WindowOpenDisposition target_disposition,
     bool user_gesture,
     const CefPopupFeatures& popupFeatures,
     CefWindowInfo& windowInfo,
@@ -282,6 +284,37 @@ void StrataClient::RespondPermission(unsigned long long request_id, bool allow) 
     pending.prompt_callback->Continue(allow ? CEF_PERMISSION_RESULT_ACCEPT
                                              : CEF_PERMISSION_RESULT_DENY);
   }
+}
+
+void StrataClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                              TerminationStatus status,
+                                              int error_code,
+                                              const CefString& error_string) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!crash_callback_) {
+    return;
+  }
+  const char* reason = "crashed";
+  switch (status) {
+    case TS_PROCESS_WAS_KILLED:
+      reason = "killed";
+      break;
+    case TS_PROCESS_OOM:
+      reason = "oom";
+      break;
+    case TS_ABNORMAL_TERMINATION:
+      reason = "abnormal";
+      break;
+    default:
+      break;
+  }
+  const int id = FindId(browser);
+  crash_callback_(id >= 0 ? static_cast<unsigned long long>(id) : 0, reason);
+}
+
+void StrataClient::SetCrashCallback(void (*callback)(unsigned long long browser_id,
+                                                       const char* reason)) {
+  crash_callback_ = callback;
 }
 
 void StrataClient::OnTitleChange(CefRefPtr<CefBrowser> browser,

@@ -29,4 +29,14 @@ export interface Tab {
   // frontend, simply never reported to record_visit and never shown
   // "Continue" history on its home page — see tabsStore and HomePage.
   isPrivate: boolean;
+  // Its renderer process crashed/was killed/ran out of memory
+  // (Implementation Plan Phase 6's crash recovery — see tabsStore's
+  // markCrashed) — the CEF browser itself survives and can still be
+  // reloaded, but shows nothing until then, so a "web" tab in this state
+  // is treated like an internal page and gets a real recovery UI instead
+  // (see CrashedPagePanel).
+  crashed: boolean;
+  // "crashed" | "killed" | "oom" | "abnormal" — see cef_bridge.rs's
+  // CrashEvent. null until the tab actually crashes.
+  crashReason: string | null;
 }

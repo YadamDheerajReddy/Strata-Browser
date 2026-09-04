@@ -15,6 +15,7 @@ import { ContinuumPanel } from "./components/ContinuumPanel";
 import { SaveMomentDialog } from "./components/SaveMomentDialog";
 import { RestoringMomentOverlay } from "./components/RestoringMomentOverlay";
 import { CommandPalette } from "./components/CommandPalette";
+import { CrashedPagePanel } from "./components/CrashedPagePanel";
 import { useTabsStore } from "./stores/tabsStore";
 import { useBookmarksStore } from "./stores/bookmarksStore";
 import { freezeTab } from "./lib/moments";
@@ -36,6 +37,7 @@ export default function App() {
   const closeTab = useTabsStore((s) => s.closeTab);
   const setActiveTab = useTabsStore((s) => s.setActiveTab);
   const refreshTabState = useTabsStore((s) => s.refreshTabState);
+  const markCrashed = useTabsStore((s) => s.markCrashed);
   const toggleBookmark = useBookmarksStore((s) => s.toggle);
 
   // First launch: land on a single tab (App Flow doc §2 — no account, no
@@ -204,6 +206,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A tab's renderer process crashed/was killed/ran out of memory
+  // (Implementation Plan Phase 6's crash recovery — see cef_bridge.rs's
+  // CrashEvent and strata_client.cpp's OnRenderProcessTerminated).
+  useEffect(() => {
+    const unlisten = listen<{ browserId: number; reason: string }>("tab-crashed", (event) => {
+      void markCrashed(event.payload.browserId, event.payload.reason);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clicking a history entry opens it in a fresh tab and puts the History
   // page away — there's no CEF browser behind the History tab itself to
   // navigate.
@@ -253,6 +268,9 @@ export default function App() {
         {activeTab?.kind === "home" && <HomePage tabId={activeTab.id} isPrivate={activeTab.isPrivate} />}
         {activeTab?.kind === "history" && <HistoryPanel onNavigate={navigateFromPanel} />}
         {activeTab?.kind === "downloads" && <DownloadsPanel />}
+        {activeTab?.kind === "web" && activeTab.crashed && (
+          <CrashedPagePanel tab={activeTab} reason={activeTab.crashReason} />
+        )}
       </div>
     </div>
   );
